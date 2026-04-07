@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 :root {
-  color-scheme: dark;
+  color-scheme: light dark;
 }
 
 * {
@@ -18,7 +18,7 @@ body {
     ui-sans-serif,
     system-ui,
     sans-serif;
-  background: #090910;
+  background: transparent;
 }
 
 body {

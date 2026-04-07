@@ -5,6 +5,7 @@ import {
   addEdge,
   Background,
   ConnectionLineType,
+  ConnectionMode,
   Controls,
   MiniMap,
   ReactFlow,
@@ -29,15 +30,23 @@ import { sampleWorkflow } from "@agent-studio/shared";
 import {
   Bot,
   Download,
+  Lock,
+  LockOpen,
+  Moon,
+  Pencil,
   Play,
   Plus,
   Save,
   Server,
   Sparkles,
+  Sun,
   Upload,
+  X,
 } from "lucide-react";
 import { AgentNode } from "./agent-node";
 import { cn } from "@/lib/utils";
+
+type ThemeMode = "dark" | "light";
 
 type StudioNodeData = {
   label: string;
@@ -48,6 +57,7 @@ type StudioNodeData = {
   provider?: ProviderCredential;
   subtitle?: string;
   tools?: string[];
+  theme?: ThemeMode;
 };
 
 type StudioFlowNode = Node<StudioNodeData>;
@@ -61,6 +71,7 @@ function asFlowNode(
   agents: AgentProfile[],
   providers: ProviderCredential[],
   statuses: Record<string, StudioNodeData["status"]>,
+  theme: ThemeMode,
 ): StudioFlowNode {
   const agent =
     node.type === "agent"
@@ -90,6 +101,7 @@ function asFlowNode(
           : node.type === "http_tool"
             ? ["http", "fetch"]
             : [],
+      theme,
     },
   };
 }
@@ -98,10 +110,11 @@ function workflowToFlow(
   workflow: WorkflowDefinition,
   agents: AgentProfile[],
   providers: ProviderCredential[],
-  statuses: Record<string, StudioNodeData["status"]> = {},
+  statuses: Record<string, StudioNodeData["status"]>,
+  theme: ThemeMode,
 ) {
   const nodes = workflow.nodes.map((node) =>
-    asFlowNode(node, agents, providers, statuses),
+    asFlowNode(node, agents, providers, statuses, theme),
   );
   const edges: Edge[] = workflow.edges.map((edge) => ({
     id: edge.id,
@@ -111,8 +124,13 @@ function workflowToFlow(
     animated: statuses[edge.source] === "running",
     type: "smoothstep",
     style: {
-      stroke: statuses[edge.source] === "running" ? "#7c7cff" : "rgba(255,255,255,0.09)",
-      strokeWidth: statuses[edge.source] === "running" ? 2.5 : 1.6,
+      stroke:
+        statuses[edge.source] === "running"
+          ? "#7c7cff"
+          : theme === "dark"
+            ? "rgba(255,255,255,0.12)"
+            : "rgba(71,85,105,0.3)",
+      strokeWidth: statuses[edge.source] === "running" ? 2.5 : 1.8,
     },
   }));
 
@@ -167,43 +185,100 @@ function maskKey(value?: string) {
 }
 
 function headersToText(headers: Record<string, string>) {
-  return Object.keys(headers).length === 0 ? "{}" : JSON.stringify(headers, null, 2);
+  return Object.keys(headers).length ? JSON.stringify(headers, null, 2) : "{}";
 }
 
 function parseHeadersText(value: string) {
   if (!value.trim()) {
-    return {} as Record<string, string>;
+    return {};
   }
   const parsed = JSON.parse(value) as Record<string, unknown>;
   return Object.fromEntries(
-    Object.entries(parsed).map(([key, headerValue]) => [key, String(headerValue)]),
+    Object.entries(parsed).map(([key, item]) => [key, String(item)]),
   );
+}
+
+function panelClass(theme: ThemeMode) {
+  return theme === "dark"
+    ? "border-white/8 bg-white/[0.03] text-white"
+    : "border-slate-200 bg-white/85 text-slate-900";
+}
+
+function cardClass(theme: ThemeMode, selected = false) {
+  if (selected) {
+    return theme === "dark"
+      ? "border-indigo-400/40 bg-indigo-500/10"
+      : "border-indigo-300 bg-indigo-50";
+  }
+  return theme === "dark"
+    ? "border-white/8 bg-black/20 hover:border-white/16"
+    : "border-slate-200 bg-slate-50 hover:border-slate-300";
+}
+
+function inputClass(theme: ThemeMode) {
+  return theme === "dark"
+    ? "border-white/10 bg-black/25 text-white"
+    : "border-slate-200 bg-white text-slate-900";
+}
+
+function mutedClass(theme: ThemeMode) {
+  return theme === "dark" ? "text-white/35" : "text-slate-500";
+}
+
+function subtleClass(theme: ThemeMode) {
+  return theme === "dark" ? "text-white/30" : "text-slate-500";
 }
 
 export function StudioShell() {
   const [snapshot, setSnapshot] = useState<StudioSnapshot | null>(null);
   const [runs, setRuns] = useState<RunRecord[]>([]);
-  const [selectedWorkflowId, setSelectedWorkflowId] = useState<string>("");
-  const [selectedNodeId, setSelectedNodeId] = useState<string>("");
-  const [selectedAgentId, setSelectedAgentId] = useState<string>("");
-  const [selectedProviderId, setSelectedProviderId] = useState<string>("");
+  const [selectedWorkflowId, setSelectedWorkflowId] = useState("");
+  const [selectedNodeId, setSelectedNodeId] = useState("");
+  const [selectedAgentId, setSelectedAgentId] = useState("");
+  const [selectedProviderId, setSelectedProviderId] = useState("");
   const [selectedRun, setSelectedRun] = useState<RunRecord | null>(null);
   const [events, setEvents] = useState<RunEvent[]>([]);
   const [providerHeadersText, setProviderHeadersText] = useState("{}");
-  const [providerHeadersError, setProviderHeadersError] = useState<string>("");
+  const [providerHeadersError, setProviderHeadersError] = useState("");
+  const [providerModalOpen, setProviderModalOpen] = useState(false);
+  const [gridLocked, setGridLocked] = useState(true);
+  const [theme, setTheme] = useState<ThemeMode>("dark");
+  const [ollamaModels, setOllamaModels] = useState<string[]>([]);
+  const [ollamaModelsLoading, setOllamaModelsLoading] = useState(false);
+  const [ollamaModelsError, setOllamaModelsError] = useState("");
   const [nodeStatuses, setNodeStatuses] = useState<Record<string, StudioNodeData["status"]>>(
     {},
   );
   const [isPending, startTransition] = useTransition();
+  const [nodes, setNodes, onNodesChange] = useNodesState<StudioFlowNode>([]);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
+  const loadStudioRef = useRef<() => Promise<void>>(async () => undefined);
 
   const workflow =
     snapshot?.workflows.find((item) => item.id === selectedWorkflowId) ??
     snapshot?.workflows[0] ??
     sampleWorkflow;
 
-  const [nodes, setNodes, onNodesChange] = useNodesState<StudioFlowNode>([]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
-  const loadStudioRef = useRef<() => Promise<void>>(async () => undefined);
+  const selectedAgent = useMemo(
+    () => snapshot?.agents.find((agent) => agent.id === selectedAgentId) ?? null,
+    [snapshot, selectedAgentId],
+  );
+
+  const selectedProvider = useMemo(
+    () =>
+      snapshot?.providers.find((provider) => provider.id === selectedProviderId) ?? null,
+    [snapshot, selectedProviderId],
+  );
+
+  const selectedNode = useMemo(
+    () => workflow?.nodes.find((node) => node.id === selectedNodeId) ?? null,
+    [workflow, selectedNodeId],
+  );
+
+  const selectedFlowNode = useMemo(
+    () => nodes.find((node) => node.id === selectedNodeId) ?? null,
+    [nodes, selectedNodeId],
+  );
 
   loadStudioRef.current = async () => {
     const [studioResponse, runsResponse] = await Promise.all([
@@ -220,8 +295,24 @@ export function StudioShell() {
   };
 
   useEffect(() => {
+    const savedTheme = window.localStorage.getItem("agent-studio-theme");
+    const savedGrid = window.localStorage.getItem("agent-studio-grid-locked");
+    if (savedTheme === "dark" || savedTheme === "light") {
+      setTheme(savedTheme);
+    }
+    if (savedGrid === "true" || savedGrid === "false") {
+      setGridLocked(savedGrid === "true");
+    }
     void loadStudioRef.current();
   }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem("agent-studio-theme", theme);
+  }, [theme]);
+
+  useEffect(() => {
+    window.localStorage.setItem("agent-studio-grid-locked", String(gridLocked));
+  }, [gridLocked]);
 
   useEffect(() => {
     if (!workflow || !snapshot) {
@@ -232,11 +323,12 @@ export function StudioShell() {
       snapshot.agents,
       snapshot.providers,
       nodeStatuses,
+      theme,
     );
     setNodes(flow.nodes);
     setEdges(flow.edges);
     setSelectedNodeId((current) => current || flow.nodes[0]?.id || "");
-  }, [workflow, snapshot, nodeStatuses, setEdges, setNodes]);
+  }, [workflow, snapshot, nodeStatuses, theme, setEdges, setNodes]);
 
   useEffect(() => {
     if (!snapshot) {
@@ -250,27 +342,6 @@ export function StudioShell() {
     }
   }, [snapshot, selectedAgentId, selectedProviderId]);
 
-  const selectedNode = useMemo(
-    () => workflow?.nodes.find((node) => node.id === selectedNodeId) ?? null,
-    [workflow, selectedNodeId],
-  );
-
-  const selectedFlowNode = useMemo(
-    () => nodes.find((node) => node.id === selectedNodeId) ?? null,
-    [nodes, selectedNodeId],
-  );
-
-  const selectedAgent = useMemo(
-    () => snapshot?.agents.find((agent) => agent.id === selectedAgentId) ?? null,
-    [snapshot, selectedAgentId],
-  );
-
-  const selectedProvider = useMemo(
-    () =>
-      snapshot?.providers.find((provider) => provider.id === selectedProviderId) ?? null,
-    [snapshot, selectedProviderId],
-  );
-
   useEffect(() => {
     if (!selectedProvider) {
       setProviderHeadersText("{}");
@@ -281,6 +352,50 @@ export function StudioShell() {
     setProviderHeadersError("");
   }, [selectedProvider]);
 
+  useEffect(() => {
+    async function loadOllamaModels() {
+      if (!selectedAgent || !snapshot) {
+        setOllamaModels([]);
+        setOllamaModelsError("");
+        return;
+      }
+
+      const provider = snapshot.providers.find(
+        (item) => item.id === selectedAgent.providerId,
+      );
+      if (!provider || provider.type !== "ollama") {
+        setOllamaModels([]);
+        setOllamaModelsError("");
+        return;
+      }
+
+      setOllamaModelsLoading(true);
+      setOllamaModelsError("");
+      try {
+        const response = await fetch("/api/providers/models", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(provider),
+        });
+        const json = (await response.json()) as {
+          models?: string[];
+          error?: string;
+        };
+        setOllamaModels(json.models ?? []);
+        setOllamaModelsError(json.error ?? "");
+      } catch (error) {
+        setOllamaModels([]);
+        setOllamaModelsError(
+          error instanceof Error ? error.message : "Unable to load local models.",
+        );
+      } finally {
+        setOllamaModelsLoading(false);
+      }
+    }
+
+    void loadOllamaModels();
+  }, [selectedAgent, snapshot]);
+
   const onConnect = useMemo<OnConnect>(
     () => (connection) =>
       setEdges((current) =>
@@ -290,12 +405,15 @@ export function StudioShell() {
             id: crypto.randomUUID(),
             type: "smoothstep",
             animated: false,
-            style: { stroke: "rgba(255,255,255,0.09)", strokeWidth: 1.6 },
+            style: {
+              stroke: theme === "dark" ? "rgba(255,255,255,0.12)" : "rgba(71,85,105,0.3)",
+              strokeWidth: 1.8,
+            },
           },
           current,
         ),
       ),
-    [setEdges],
+    [setEdges, theme],
   );
 
   function updateSnapshot(mutator: (current: StudioSnapshot) => StudioSnapshot) {
@@ -392,17 +510,16 @@ export function StudioShell() {
 
   async function saveSelectedProvider() {
     if (!selectedProvider) {
-      return;
+      return false;
     }
-
     try {
       const customHeaders = parseHeadersText(providerHeadersText);
-      setProviderHeadersError("");
       const payload: ProviderCredential = {
         ...selectedProvider,
         customHeaders,
         updatedAt: new Date().toISOString(),
       };
+      setProviderHeadersError("");
       const response = await fetch("/api/providers", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -415,11 +532,12 @@ export function StudioShell() {
           provider.id === saved.id ? saved : provider,
         ),
       }));
-      setProviderHeadersText(headersToText(saved.customHeaders));
+      return true;
     } catch (error) {
       setProviderHeadersError(
         error instanceof Error ? error.message : "Headers must be valid JSON.",
       );
+      return false;
     }
   }
 
@@ -521,6 +639,7 @@ export function StudioShell() {
       id: crypto.randomUUID(),
       name: `Custom Profile ${snapshot.agents.length + 1}`,
       description: "User-defined agent profile",
+      notes: "",
       profileType: "custom",
       role: "worker",
       providerId: provider.id,
@@ -573,7 +692,7 @@ export function StudioShell() {
       providers: [...current.providers, saved],
     }));
     setSelectedProviderId(saved.id);
-    setProviderHeadersText(headersToText(saved.customHeaders));
+    setProviderModalOpen(true);
   }
 
   async function exportStudio() {
@@ -604,6 +723,7 @@ export function StudioShell() {
     if (!workflow) {
       return;
     }
+
     startTransition(async () => {
       setEvents([]);
       setNodeStatuses({});
@@ -654,29 +774,35 @@ export function StudioShell() {
 
   return (
     <ReactFlowProvider>
-      <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(85,99,255,0.18),_transparent_30%),linear-gradient(180deg,_#0b0b14_0%,_#090910_100%)] text-white">
+      <div
+        className={cn(
+          "min-h-screen",
+          theme === "dark"
+            ? "bg-[radial-gradient(circle_at_top,_rgba(85,99,255,0.18),_transparent_30%),linear-gradient(180deg,_#0b0b14_0%,_#090910_100%)] text-white"
+            : "bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.18),_transparent_28%),linear-gradient(180deg,_#f8fbff_0%,_#eef3ff_100%)] text-slate-900",
+        )}
+      >
         <div className="mx-auto flex min-h-screen max-w-[1680px] gap-4 p-4">
           <aside className="flex w-[390px] shrink-0 flex-col gap-4">
-            <section className="rounded-[24px] border border-white/8 bg-white/[0.03] p-4 shadow-[0_20px_60px_rgba(0,0,0,0.35)] backdrop-blur-xl">
+            <section className={cn("rounded-[24px] border p-4 backdrop-blur-xl", panelClass(theme))}>
               <div className="flex items-center justify-between">
                 <div>
-                  <div className="text-xs uppercase tracking-[0.3em] text-white/30">
+                  <div className={cn("text-xs uppercase tracking-[0.3em]", subtleClass(theme))}>
                     Profiles
                   </div>
-                  <div className="mt-1 text-2xl font-medium">
-                    {snapshot?.agents.length ?? 0}
-                  </div>
-                  <div className="mt-1 text-sm text-white/35">
-                    Each profile chooses its own provider and model.
+                  <div className="mt-1 text-2xl font-medium">{snapshot?.agents.length ?? 0}</div>
+                  <div className={cn("mt-1 text-sm", mutedClass(theme))}>
+                    Each agent profile can use its own provider and model.
                   </div>
                 </div>
                 <button
                   onClick={createAgent}
-                  className="rounded-full border border-indigo-400/25 bg-indigo-500/10 p-2 text-indigo-100 transition hover:bg-indigo-500/20"
+                  className="rounded-full border border-indigo-400/25 bg-indigo-500/10 p-2 text-indigo-100"
                 >
                   <Plus className="h-4 w-4" />
                 </button>
               </div>
+
               <div className="mt-4 grid gap-3">
                 {snapshot?.agents.map((agent) => {
                   const provider = snapshot.providers.find(
@@ -686,14 +812,9 @@ export function StudioShell() {
                     <button
                       key={agent.id}
                       onClick={() => setSelectedAgentId(agent.id)}
-                      className={cn(
-                        "rounded-2xl border bg-black/20 p-3 text-left transition",
-                        selectedAgentId === agent.id
-                          ? "border-indigo-400/40 bg-indigo-500/10"
-                          : "border-white/8 hover:border-white/16",
-                      )}
+                      className={cn("rounded-2xl border p-3 text-left transition", cardClass(theme, selectedAgentId === agent.id))}
                     >
-                      <div className="flex items-center gap-3">
+                      <div className="flex items-start gap-3">
                         <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan-300 to-emerald-300 text-slate-950">
                           {agent.avatar || "🤖"}
                         </div>
@@ -706,19 +827,25 @@ export function StudioShell() {
                               </span>
                             ) : null}
                           </div>
-                          <div className="truncate text-xs text-white/35">
+                          <div className={cn("truncate text-xs", mutedClass(theme))}>
                             {agent.profileType} · {agent.model} · {provider?.name}
                           </div>
+                          {agent.notes ? (
+                            <div className={cn("mt-1 line-clamp-2 text-xs", mutedClass(theme))}>
+                              {agent.notes}
+                            </div>
+                          ) : null}
                         </div>
                       </div>
                     </button>
                   );
                 })}
               </div>
+
               {selectedAgent ? (
-                <div className="mt-4 space-y-3 rounded-2xl border border-white/8 bg-black/20 p-4">
-                  <div className="flex items-center justify-between">
-                    <div className="text-xs uppercase tracking-[0.26em] text-white/30">
+                <div className={cn("mt-4 rounded-2xl border p-4", theme === "dark" ? "border-white/8 bg-black/20" : "border-slate-200 bg-slate-50")}>
+                  <div className="mb-3 flex items-center justify-between">
+                    <div className={cn("text-xs uppercase tracking-[0.26em]", subtleClass(theme))}>
                       Edit Profile
                     </div>
                     <button
@@ -729,24 +856,22 @@ export function StudioShell() {
                       Save
                     </button>
                   </div>
+
                   <div className="grid grid-cols-2 gap-3">
                     <div className="col-span-2">
-                      <label className="text-xs uppercase tracking-[0.22em] text-white/30">
+                      <label className={cn("text-xs uppercase tracking-[0.22em]", subtleClass(theme))}>
                         Name
                       </label>
                       <input
                         value={selectedAgent.name}
                         onChange={(event) =>
-                          updateSelectedAgent((agent) => ({
-                            ...agent,
-                            name: event.target.value,
-                          }))
+                          updateSelectedAgent((agent) => ({ ...agent, name: event.target.value }))
                         }
-                        className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
+                        className={cn("mt-2 w-full rounded-2xl border px-4 py-3 text-sm outline-none", inputClass(theme))}
                       />
                     </div>
                     <div>
-                      <label className="text-xs uppercase tracking-[0.22em] text-white/30">
+                      <label className={cn("text-xs uppercase tracking-[0.22em]", subtleClass(theme))}>
                         Profile Type
                       </label>
                       <input
@@ -757,11 +882,11 @@ export function StudioShell() {
                             profileType: event.target.value,
                           }))
                         }
-                        className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
+                        className={cn("mt-2 w-full rounded-2xl border px-4 py-3 text-sm outline-none", inputClass(theme))}
                       />
                     </div>
                     <div>
-                      <label className="text-xs uppercase tracking-[0.22em] text-white/30">
+                      <label className={cn("text-xs uppercase tracking-[0.22em]", subtleClass(theme))}>
                         Role
                       </label>
                       <select
@@ -772,14 +897,14 @@ export function StudioShell() {
                             role: event.target.value as AgentProfile["role"],
                           }))
                         }
-                        className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
+                        className={cn("mt-2 w-full rounded-2xl border px-4 py-3 text-sm outline-none", inputClass(theme))}
                       >
                         <option value="worker">worker</option>
                         <option value="coordinator">coordinator</option>
                       </select>
                     </div>
                     <div>
-                      <label className="text-xs uppercase tracking-[0.22em] text-white/30">
+                      <label className={cn("text-xs uppercase tracking-[0.22em]", subtleClass(theme))}>
                         Provider
                       </label>
                       <select
@@ -796,7 +921,7 @@ export function StudioShell() {
                             };
                           })
                         }
-                        className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
+                        className={cn("mt-2 w-full rounded-2xl border px-4 py-3 text-sm outline-none", inputClass(theme))}
                       >
                         {snapshot?.providers.map((provider) => (
                           <option key={provider.id} value={provider.id}>
@@ -806,37 +931,64 @@ export function StudioShell() {
                       </select>
                     </div>
                     <div>
-                      <label className="text-xs uppercase tracking-[0.22em] text-white/30">
+                      <label className={cn("text-xs uppercase tracking-[0.22em]", subtleClass(theme))}>
                         Model
                       </label>
-                      <input
-                        value={selectedAgent.model}
-                        onChange={(event) =>
-                          updateSelectedAgent((agent) => ({
-                            ...agent,
-                            model: event.target.value,
-                          }))
-                        }
-                        className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
-                      />
+                      {snapshot?.providers.find(
+                        (provider) => provider.id === selectedAgent.providerId,
+                      )?.type === "ollama" ? (
+                        <>
+                          <select
+                            value={selectedAgent.model}
+                            onChange={(event) =>
+                              updateSelectedAgent((agent) => ({
+                                ...agent,
+                                model: event.target.value,
+                              }))
+                            }
+                            className={cn("mt-2 w-full rounded-2xl border px-4 py-3 text-sm outline-none", inputClass(theme))}
+                          >
+                            {(ollamaModels.length > 0
+                              ? ollamaModels
+                              : [selectedAgent.model || "loading-models"]).map((model) => (
+                              <option key={model} value={model}>
+                                {model}
+                              </option>
+                            ))}
+                          </select>
+                          <div className={cn("mt-2 text-xs", mutedClass(theme))}>
+                            {ollamaModelsLoading
+                              ? "Loading locally available Ollama models..."
+                              : ollamaModelsError || "Model list is sourced from your local Ollama instance."}
+                          </div>
+                        </>
+                      ) : (
+                        <input
+                          value={selectedAgent.model}
+                          onChange={(event) =>
+                            updateSelectedAgent((agent) => ({
+                              ...agent,
+                              model: event.target.value,
+                            }))
+                          }
+                          className={cn("mt-2 w-full rounded-2xl border px-4 py-3 text-sm outline-none", inputClass(theme))}
+                        />
+                      )}
                     </div>
                     <div>
-                      <label className="text-xs uppercase tracking-[0.22em] text-white/30">
+                      <label className={cn("text-xs uppercase tracking-[0.22em]", subtleClass(theme))}>
                         Avatar
                       </label>
                       <input
                         value={selectedAgent.avatar}
                         onChange={(event) =>
-                          updateSelectedAgent((agent) => ({
-                            ...agent,
-                            avatar: event.target.value,
-                          }))
+                          updateSelectedAgent((agent) => ({ ...agent, avatar: event.target.value }))
                         }
-                        className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
+                        className={cn("mt-2 w-full rounded-2xl border px-4 py-3 text-sm outline-none", inputClass(theme))}
                       />
                     </div>
                     <div className="col-span-2">
-                      <label className="text-xs uppercase tracking-[0.22em] text-white/30">
+                      <label className={cn("text-xs uppercase tracking-[0.22em]", subtleClass(theme))}>
                         Description
                       </label>
                       <textarea
@@ -848,11 +1000,24 @@ export function StudioShell() {
                             description: event.target.value,
                           }))
                         }
-                        className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
+                        className={cn("mt-2 w-full rounded-2xl border px-4 py-3 text-sm outline-none", inputClass(theme))}
                       />
                     </div>
                     <div className="col-span-2">
-                      <label className="text-xs uppercase tracking-[0.22em] text-white/30">
+                      <label className={cn("text-xs uppercase tracking-[0.22em]", subtleClass(theme))}>
+                        Notes
+                      </label>
+                      <textarea
+                        rows={3}
+                        value={selectedAgent.notes}
+                        onChange={(event) =>
+                          updateSelectedAgent((agent) => ({ ...agent, notes: event.target.value }))
+                        }
+                        className={cn("mt-2 w-full rounded-2xl border px-4 py-3 text-sm outline-none", inputClass(theme))}
+                      />
+                    </div>
+                    <div className="col-span-2">
+                      <label className={cn("text-xs uppercase tracking-[0.22em]", subtleClass(theme))}>
                         System Prompt
                       </label>
                       <textarea
@@ -864,11 +1029,11 @@ export function StudioShell() {
                             systemPrompt: event.target.value,
                           }))
                         }
-                        className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
+                        className={cn("mt-2 w-full rounded-2xl border px-4 py-3 text-sm outline-none", inputClass(theme))}
                       />
                     </div>
                     <div>
-                      <label className="text-xs uppercase tracking-[0.22em] text-white/30">
+                      <label className={cn("text-xs uppercase tracking-[0.22em]", subtleClass(theme))}>
                         Temperature
                       </label>
                       <input
@@ -883,11 +1048,11 @@ export function StudioShell() {
                             temperature: Number(event.target.value) || 0,
                           }))
                         }
-                        className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
+                        className={cn("mt-2 w-full rounded-2xl border px-4 py-3 text-sm outline-none", inputClass(theme))}
                       />
                     </div>
                     <div>
-                      <label className="text-xs uppercase tracking-[0.22em] text-white/30">
+                      <label className={cn("text-xs uppercase tracking-[0.22em]", subtleClass(theme))}>
                         Max Tokens
                       </label>
                       <input
@@ -901,11 +1066,11 @@ export function StudioShell() {
                             maxTokens: Number(event.target.value) || 1,
                           }))
                         }
-                        className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
+                        className={cn("mt-2 w-full rounded-2xl border px-4 py-3 text-sm outline-none", inputClass(theme))}
                       />
                     </div>
                     <div>
-                      <label className="text-xs uppercase tracking-[0.22em] text-white/30">
+                      <label className={cn("text-xs uppercase tracking-[0.22em]", subtleClass(theme))}>
                         Output Mode
                       </label>
                       <select
@@ -916,14 +1081,14 @@ export function StudioShell() {
                             outputMode: event.target.value as AgentProfile["outputMode"],
                           }))
                         }
-                        className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
+                        className={cn("mt-2 w-full rounded-2xl border px-4 py-3 text-sm outline-none", inputClass(theme))}
                       >
                         <option value="text">text</option>
                         <option value="json">json</option>
                       </select>
                     </div>
                     <div>
-                      <label className="text-xs uppercase tracking-[0.22em] text-white/30">
+                      <label className={cn("text-xs uppercase tracking-[0.22em]", subtleClass(theme))}>
                         Allowed Tools
                       </label>
                       <input
@@ -937,7 +1102,7 @@ export function StudioShell() {
                               .filter(Boolean),
                           }))
                         }
-                        className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
+                        className={cn("mt-2 w-full rounded-2xl border px-4 py-3 text-sm outline-none", inputClass(theme))}
                       />
                     </div>
                   </div>
@@ -945,19 +1110,24 @@ export function StudioShell() {
               ) : null}
             </section>
 
-            <section className="rounded-[24px] border border-white/8 bg-white/[0.03] p-4 backdrop-blur-xl">
+            <section className={cn("rounded-[24px] border p-4 backdrop-blur-xl", panelClass(theme))}>
               <div className="flex items-center justify-between">
                 <div>
-                  <div className="text-xs uppercase tracking-[0.3em] text-white/30">
+                  <div className={cn("text-xs uppercase tracking-[0.3em]", subtleClass(theme))}>
                     Providers
                   </div>
-                  <div className="mt-1 text-sm text-white/35">
-                    OpenAI, Ollama, OpenAI-compatible, or any custom endpoint you want to wire.
+                  <div className={cn("mt-1 text-sm", mutedClass(theme))}>
+                    Click a provider card to edit it in a popup.
                   </div>
                 </div>
                 <button
                   onClick={createProvider}
-                  className="rounded-full border border-white/8 bg-white/[0.04] p-2 text-white/70 transition hover:bg-white/[0.08]"
+                  className={cn(
+                    "rounded-full border p-2",
+                    theme === "dark"
+                      ? "border-white/8 bg-white/[0.04] text-white/70"
+                      : "border-slate-200 bg-white text-slate-700",
+                  )}
                 >
                   <Plus className="h-4 w-4" />
                 </button>
@@ -966,13 +1136,11 @@ export function StudioShell() {
                 {snapshot?.providers.map((provider) => (
                   <button
                     key={provider.id}
-                    onClick={() => setSelectedProviderId(provider.id)}
-                    className={cn(
-                      "rounded-2xl border bg-black/20 p-3 text-left transition",
-                      selectedProviderId === provider.id
-                        ? "border-indigo-400/40 bg-indigo-500/10"
-                        : "border-white/8 hover:border-white/16",
-                    )}
+                    onClick={() => {
+                      setSelectedProviderId(provider.id);
+                      setProviderModalOpen(true);
+                    }}
+                    className={cn("rounded-2xl border p-3 text-left transition", cardClass(theme, selectedProviderId === provider.id))}
                   >
                     <div className="flex items-center gap-2 text-sm font-medium">
                       <Server className="h-4 w-4 text-cyan-300" />
@@ -983,146 +1151,27 @@ export function StudioShell() {
                         </span>
                       ) : null}
                     </div>
-                    <div className="mt-1 text-xs text-white/35">
+                    <div className={cn("mt-1 text-xs", mutedClass(theme))}>
                       {provider.type} · {provider.defaultModel}
                     </div>
-                    <div className="mt-1 truncate text-xs text-white/28">
+                    <div className={cn("mt-1 truncate text-xs", theme === "dark" ? "text-white/25" : "text-slate-400")}>
                       {provider.baseUrl || "OpenAI default endpoint"}
+                    </div>
+                    <div className={cn("mt-2 flex items-center gap-2 text-xs", mutedClass(theme))}>
+                      <Pencil className="h-3.5 w-3.5" />
+                      Click to edit
                     </div>
                   </button>
                 ))}
               </div>
-              {selectedProvider ? (
-                <div className="mt-4 space-y-3 rounded-2xl border border-white/8 bg-black/20 p-4">
-                  <div className="flex items-center justify-between">
-                    <div className="text-xs uppercase tracking-[0.26em] text-white/30">
-                      Edit Provider
-                    </div>
-                    <button
-                      onClick={saveSelectedProvider}
-                      className="inline-flex items-center gap-2 rounded-full border border-indigo-400/25 bg-indigo-500/10 px-3 py-1.5 text-xs uppercase tracking-[0.18em] text-indigo-100"
-                    >
-                      <Save className="h-3.5 w-3.5" />
-                      Save
-                    </button>
-                  </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="col-span-2">
-                      <label className="text-xs uppercase tracking-[0.22em] text-white/30">
-                        Provider Name
-                      </label>
-                      <input
-                        value={selectedProvider.name}
-                        onChange={(event) =>
-                          updateSelectedProvider((provider) => ({
-                            ...provider,
-                            name: event.target.value,
-                          }))
-                        }
-                        className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-xs uppercase tracking-[0.22em] text-white/30">
-                        Protocol
-                      </label>
-                      <select
-                        value={selectedProvider.type}
-                        onChange={(event) =>
-                          updateSelectedProvider((provider) => ({
-                            ...provider,
-                            type: event.target.value as ProviderCredential["type"],
-                          }))
-                        }
-                        className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
-                      >
-                        <option value="openai_compatible">openai_compatible</option>
-                        <option value="openai">openai</option>
-                        <option value="ollama">ollama</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="text-xs uppercase tracking-[0.22em] text-white/30">
-                        Default Model
-                      </label>
-                      <input
-                        value={selectedProvider.defaultModel}
-                        onChange={(event) =>
-                          updateSelectedProvider((provider) => ({
-                            ...provider,
-                            defaultModel: event.target.value,
-                          }))
-                        }
-                        className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
-                      />
-                    </div>
-                    <div className="col-span-2">
-                      <label className="text-xs uppercase tracking-[0.22em] text-white/30">
-                        Base URL
-                      </label>
-                      <input
-                        value={selectedProvider.baseUrl ?? ""}
-                        onChange={(event) =>
-                          updateSelectedProvider((provider) => ({
-                            ...provider,
-                            baseUrl: event.target.value || undefined,
-                          }))
-                        }
-                        className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
-                      />
-                    </div>
-                    <div className="col-span-2">
-                      <label className="text-xs uppercase tracking-[0.22em] text-white/30">
-                        API Key
-                      </label>
-                      <input
-                        value={selectedProvider.apiKey ?? ""}
-                        onChange={(event) =>
-                          updateSelectedProvider((provider) => ({
-                            ...provider,
-                            apiKey: event.target.value,
-                          }))
-                        }
-                        className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
-                      />
-                      <div className="mt-2 text-xs text-white/35">
-                        Stored locally. Current value: {maskKey(selectedProvider.apiKey)}
-                      </div>
-                    </div>
-                    <div className="col-span-2">
-                      <label className="text-xs uppercase tracking-[0.22em] text-white/30">
-                        Custom Headers JSON
-                      </label>
-                      <textarea
-                        rows={4}
-                        value={providerHeadersText}
-                        onChange={(event) => {
-                          setProviderHeadersText(event.target.value);
-                          setProviderHeadersError("");
-                        }}
-                        className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
-                      />
-                      {providerHeadersError ? (
-                        <div className="mt-2 text-xs text-rose-300">
-                          {providerHeadersError}
-                        </div>
-                      ) : (
-                        <div className="mt-2 text-xs text-white/35">
-                          Use this for vendor-specific auth or routing headers.
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ) : null}
             </section>
 
-            <section className="rounded-[24px] border border-white/8 bg-white/[0.03] p-4 backdrop-blur-xl">
+            <section className={cn("rounded-[24px] border p-4 backdrop-blur-xl", panelClass(theme))}>
               <div className="flex items-center justify-between">
-                <div className="text-xs uppercase tracking-[0.3em] text-white/30">
+                <div className={cn("text-xs uppercase tracking-[0.3em]", subtleClass(theme))}>
                   Runs
                 </div>
-                <div className="rounded-full border border-white/8 px-2 py-1 text-[10px] uppercase tracking-[0.28em] text-white/30">
+                <div className={cn("rounded-full border px-2 py-1 text-[10px] uppercase tracking-[0.28em]", theme === "dark" ? "border-white/8 text-white/30" : "border-slate-200 text-slate-500")}>
                   History
                 </div>
               </div>
@@ -1144,10 +1193,10 @@ export function StudioShell() {
                         ),
                       );
                     }}
-                    className="w-full rounded-2xl border border-white/8 bg-black/20 p-3 text-left transition hover:border-indigo-400/30"
+                    className={cn("w-full rounded-2xl border p-3 text-left transition", cardClass(theme))}
                   >
                     <div className="truncate text-sm font-medium">{run.workflowName}</div>
-                    <div className="mt-1 text-xs text-white/35">{run.status}</div>
+                    <div className={cn("mt-1 text-xs", mutedClass(theme))}>{run.status}</div>
                   </button>
                 ))}
               </div>
@@ -1155,16 +1204,16 @@ export function StudioShell() {
           </aside>
 
           <main className="flex min-w-0 flex-1 flex-col gap-4">
-            <header className="flex items-center justify-between rounded-[28px] border border-white/8 bg-white/[0.03] px-5 py-4 backdrop-blur-xl">
+            <header className={cn("flex items-center justify-between rounded-[28px] border px-5 py-4 backdrop-blur-xl", panelClass(theme))}>
               <div>
-                <div className="text-xs uppercase tracking-[0.32em] text-white/30">
+                <div className={cn("text-xs uppercase tracking-[0.32em]", subtleClass(theme))}>
                   Agent Studio
                 </div>
                 <div className="mt-1 flex items-center gap-3">
                   <select
                     value={selectedWorkflowId}
                     onChange={(event) => setSelectedWorkflowId(event.target.value)}
-                    className="rounded-full border border-white/10 bg-black/30 px-4 py-2 text-sm outline-none"
+                    className={cn("rounded-full border px-4 py-2 text-sm outline-none", inputClass(theme))}
                   >
                     {snapshot?.workflows.map((item) => (
                       <option key={item.id} value={item.id}>
@@ -1172,22 +1221,37 @@ export function StudioShell() {
                       </option>
                     ))}
                   </select>
-                  <span className="text-sm text-white/35">
-                    Any profile can point at any configured provider and model.
+                  <span className={cn("text-sm", mutedClass(theme))}>
+                    Any provider, any model, per-agent configuration.
                   </span>
                 </div>
               </div>
+
               <div className="flex items-center gap-2">
                 <button
+                  onClick={() => setGridLocked((current) => !current)}
+                  className={cn("inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm", inputClass(theme))}
+                >
+                  {gridLocked ? <Lock className="h-4 w-4" /> : <LockOpen className="h-4 w-4" />}
+                  {gridLocked ? "Grid Locked" : "Grid Free"}
+                </button>
+                <button
+                  onClick={() => setTheme((current) => (current === "dark" ? "light" : "dark"))}
+                  className={cn("inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm", inputClass(theme))}
+                >
+                  {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+                  {theme === "dark" ? "Light Mode" : "Dark Mode"}
+                </button>
+                <button
                   onClick={() => addNode("agent")}
-                  className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm text-white/80 transition hover:bg-white/[0.08]"
+                  className={cn("inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm", inputClass(theme))}
                 >
                   <Bot className="h-4 w-4" />
                   Add Agent
                 </button>
                 <button
                   onClick={saveWorkflow}
-                  className="inline-flex items-center gap-2 rounded-full border border-indigo-400/20 bg-indigo-500/10 px-4 py-2 text-sm text-indigo-100 transition hover:bg-indigo-500/20"
+                  className="inline-flex items-center gap-2 rounded-full border border-indigo-400/25 bg-indigo-500/10 px-4 py-2 text-sm text-indigo-100"
                 >
                   <Save className="h-4 w-4" />
                   Save
@@ -1195,18 +1259,18 @@ export function StudioShell() {
                 <button
                   onClick={startRun}
                   disabled={isPending}
-                  className="inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-cyan-300 to-indigo-400 px-4 py-2 text-sm font-medium text-slate-950 transition hover:brightness-105 disabled:opacity-60"
+                  className="inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-cyan-300 to-indigo-400 px-4 py-2 text-sm font-medium text-slate-950 disabled:opacity-60"
                 >
                   <Play className="h-4 w-4" />
                   Run
                 </button>
                 <button
                   onClick={exportStudio}
-                  className="rounded-full border border-white/10 bg-white/[0.04] p-2 text-white/75"
+                  className={cn("rounded-full border p-2", inputClass(theme))}
                 >
                   <Download className="h-4 w-4" />
                 </button>
-                <label className="cursor-pointer rounded-full border border-white/10 bg-white/[0.04] p-2 text-white/75">
+                <label className={cn("cursor-pointer rounded-full border p-2", inputClass(theme))}>
                   <Upload className="h-4 w-4" />
                   <input
                     type="file"
@@ -1224,20 +1288,27 @@ export function StudioShell() {
             </header>
 
             <div className="grid min-h-0 flex-1 grid-cols-[1fr_360px] gap-4">
-              <section className="relative min-h-[760px] overflow-hidden rounded-[30px] border border-white/8 bg-[#090912]/95 shadow-[0_40px_80px_rgba(0,0,0,0.45)]">
+              <section className={cn("relative min-h-[760px] overflow-hidden rounded-[30px] border shadow-[0_40px_80px_rgba(0,0,0,0.18)]", theme === "dark" ? "border-white/8 bg-[#090912]/95" : "border-slate-200 bg-white/90")}>
                 <div className="absolute left-4 top-4 z-10 flex gap-2">
                   {(["input", "router", "http_tool", "output"] as WorkflowNode["type"][]).map(
                     (type) => (
                       <button
                         key={type}
                         onClick={() => addNode(type)}
-                        className="rounded-full border border-white/10 bg-black/25 px-3 py-1.5 text-xs uppercase tracking-[0.22em] text-white/55 transition hover:border-indigo-400/25 hover:text-white"
+                        className={cn(
+                          "rounded-full border px-3 py-1.5 text-xs uppercase tracking-[0.22em]",
+                          inputClass(theme),
+                        )}
                       >
                         {type}
                       </button>
                     ),
                   )}
                 </div>
+                <div className={cn("absolute right-4 top-4 z-10 rounded-full border px-3 py-1.5 text-xs", inputClass(theme))}>
+                  Drag from the `out` handle into the `in` handle. Grid snap is {gridLocked ? "on" : "off"}.
+                </div>
+
                 <ReactFlow
                   nodes={nodes}
                   edges={edges}
@@ -1245,40 +1316,76 @@ export function StudioShell() {
                   onEdgesChange={onEdgesChange}
                   onConnect={onConnect}
                   nodeTypes={nodeTypes}
+                  snapToGrid={gridLocked}
+                  snapGrid={[24, 24]}
+                  connectionMode={ConnectionMode.Loose}
+                  connectionRadius={36}
                   connectionLineType={ConnectionLineType.SmoothStep}
+                  connectionLineStyle={{
+                    stroke: theme === "dark" ? "#7c7cff" : "#4f46e5",
+                    strokeWidth: 2.5,
+                  }}
                   fitView
                   onNodeClick={(_, node) => setSelectedNodeId(node.id)}
                   defaultEdgeOptions={{
                     type: "smoothstep",
-                    style: { stroke: "rgba(255,255,255,0.12)", strokeWidth: 1.6 },
+                    style: {
+                      stroke:
+                        theme === "dark"
+                          ? "rgba(255,255,255,0.12)"
+                          : "rgba(71,85,105,0.3)",
+                      strokeWidth: 1.8,
+                    },
                   }}
                   proOptions={{ hideAttribution: true }}
                 >
-                  <Background color="rgba(255,255,255,0.06)" gap={28} size={1.1} />
+                  <Background
+                    color={
+                      theme === "dark"
+                        ? "rgba(255,255,255,0.06)"
+                        : "rgba(71,85,105,0.14)"
+                    }
+                    gap={24}
+                    size={gridLocked ? 1.2 : 0.8}
+                  />
                   <MiniMap
                     pannable
                     zoomable
                     nodeColor={() => "#5864ff"}
-                    maskColor="rgba(8, 8, 15, 0.78)"
-                    className="!bottom-4 !left-4 !h-28 !w-44 !rounded-2xl !border !border-white/8 !bg-black/45"
+                    maskColor={
+                      theme === "dark"
+                        ? "rgba(8, 8, 15, 0.78)"
+                        : "rgba(241,245,249,0.82)"
+                    }
+                    className={cn(
+                      "!bottom-4 !left-4 !h-28 !w-44 !rounded-2xl !border",
+                      theme === "dark"
+                        ? "!border-white/8 !bg-black/45"
+                        : "!border-slate-200 !bg-white/80",
+                    )}
                   />
                   <Controls
-                    className="[&>button]:!border-white/8 [&>button]:!bg-black/45 [&>button]:!text-white/70"
+                    className={
+                      theme === "dark"
+                        ? "[&>button]:!border-white/8 [&>button]:!bg-black/45 [&>button]:!text-white/70"
+                        : "[&>button]:!border-slate-200 [&>button]:!bg-white/90 [&>button]:!text-slate-700"
+                    }
                     showInteractive={false}
                   />
                 </ReactFlow>
               </section>
 
               <aside className="flex min-h-[760px] flex-col gap-4">
-                <section className="rounded-[28px] border border-white/8 bg-white/[0.03] p-5 backdrop-blur-xl">
-                  <div className="flex items-center gap-2 text-xs uppercase tracking-[0.32em] text-white/30">
+                <section className={cn("rounded-[28px] border p-5 backdrop-blur-xl", panelClass(theme))}>
+                  <div className={cn("flex items-center gap-2 text-xs uppercase tracking-[0.32em]", subtleClass(theme))}>
                     <Sparkles className="h-4 w-4" />
                     Inspector
                   </div>
+
                   {selectedNode && selectedFlowNode ? (
                     <div className="mt-4 space-y-4">
                       <div>
-                        <label className="text-xs uppercase tracking-[0.25em] text-white/30">
+                        <label className={cn("text-xs uppercase tracking-[0.25em]", subtleClass(theme))}>
                           Name
                         </label>
                         <input
@@ -1287,10 +1394,7 @@ export function StudioShell() {
                             setNodes((current) =>
                               current.map((node) =>
                                 node.id === selectedNodeId
-                                  ? {
-                                      ...node,
-                                      data: { ...node.data, label: event.target.value },
-                                    }
+                                  ? { ...node, data: { ...node.data, label: event.target.value } }
                                   : node,
                               ),
                             );
@@ -1299,15 +1403,16 @@ export function StudioShell() {
                               label: event.target.value,
                             }));
                           }}
-                          className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
+                          className={cn("mt-2 w-full rounded-2xl border px-4 py-3 text-sm outline-none", inputClass(theme))}
                         />
                       </div>
 
                       <div>
-                        <label className="text-xs uppercase tracking-[0.25em] text-white/30">
+                        <label className={cn("text-xs uppercase tracking-[0.25em]", subtleClass(theme))}>
                           Description
                         </label>
                         <textarea
+                          rows={3}
                           value={selectedFlowNode.data.description}
                           onChange={(event) => {
                             setNodes((current) =>
@@ -1315,10 +1420,7 @@ export function StudioShell() {
                                 node.id === selectedNodeId
                                   ? {
                                       ...node,
-                                      data: {
-                                        ...node.data,
-                                        description: event.target.value,
-                                      },
+                                      data: { ...node.data, description: event.target.value },
                                     }
                                   : node,
                               ),
@@ -1328,15 +1430,14 @@ export function StudioShell() {
                               description: event.target.value,
                             }));
                           }}
-                          rows={3}
-                          className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
+                          className={cn("mt-2 w-full rounded-2xl border px-4 py-3 text-sm outline-none", inputClass(theme))}
                         />
                       </div>
 
-                      {selectedNode.type === "agent" && (
+                      {selectedNode.type === "agent" ? (
                         <>
                           <div>
-                            <label className="text-xs uppercase tracking-[0.25em] text-white/30">
+                            <label className={cn("text-xs uppercase tracking-[0.25em]", subtleClass(theme))}>
                               Agent Profile
                             </label>
                             <select
@@ -1346,15 +1447,12 @@ export function StudioShell() {
                                   node.type === "agent"
                                     ? {
                                         ...node,
-                                        data: {
-                                          ...node.data,
-                                          agentProfileId: event.target.value,
-                                        },
+                                        data: { ...node.data, agentProfileId: event.target.value },
                                       }
                                     : node,
                                 )
                               }
-                              className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
+                              className={cn("mt-2 w-full rounded-2xl border px-4 py-3 text-sm outline-none", inputClass(theme))}
                             >
                               {snapshot?.agents.map((agent) => (
                                 <option key={agent.id} value={agent.id}>
@@ -1364,81 +1462,72 @@ export function StudioShell() {
                             </select>
                           </div>
                           <div>
-                            <label className="text-xs uppercase tracking-[0.25em] text-white/30">
+                            <label className={cn("text-xs uppercase tracking-[0.25em]", subtleClass(theme))}>
                               Prompt
                             </label>
                             <textarea
+                              rows={6}
                               value={selectedNode.data.prompt}
                               onChange={(event) =>
                                 updateSelectedNode((node) =>
                                   node.type === "agent"
-                                    ? {
-                                        ...node,
-                                        data: { ...node.data, prompt: event.target.value },
-                                      }
+                                    ? { ...node, data: { ...node.data, prompt: event.target.value } }
                                     : node,
                                 )
                               }
-                              rows={6}
-                              className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
+                              className={cn("mt-2 w-full rounded-2xl border px-4 py-3 text-sm outline-none", inputClass(theme))}
                             />
                           </div>
                         </>
-                      )}
+                      ) : null}
 
-                      {selectedNode.type === "input" && (
+                      {selectedNode.type === "input" ? (
                         <div>
-                          <label className="text-xs uppercase tracking-[0.25em] text-white/30">
+                          <label className={cn("text-xs uppercase tracking-[0.25em]", subtleClass(theme))}>
                             Input Text
                           </label>
                           <textarea
+                            rows={6}
                             value={selectedNode.data.text}
                             onChange={(event) =>
                               updateSelectedNode((node) =>
                                 node.type === "input"
-                                  ? {
-                                      ...node,
-                                      data: { ...node.data, text: event.target.value },
-                                    }
+                                  ? { ...node, data: { ...node.data, text: event.target.value } }
                                   : node,
                               )
                             }
-                            rows={6}
-                            className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
+                            className={cn("mt-2 w-full rounded-2xl border px-4 py-3 text-sm outline-none", inputClass(theme))}
                           />
                         </div>
-                      )}
+                      ) : null}
 
-                      {selectedNode.type === "router" && (
+                      {selectedNode.type === "router" ? (
                         <div>
-                          <label className="text-xs uppercase tracking-[0.25em] text-white/30">
+                          <label className={cn("text-xs uppercase tracking-[0.25em]", subtleClass(theme))}>
                             Instructions
                           </label>
                           <textarea
+                            rows={4}
                             value={selectedNode.data.instructions}
                             onChange={(event) =>
                               updateSelectedNode((node) =>
                                 node.type === "router"
                                   ? {
                                       ...node,
-                                      data: {
-                                        ...node.data,
-                                        instructions: event.target.value,
-                                      },
+                                      data: { ...node.data, instructions: event.target.value },
                                     }
                                   : node,
                               )
                             }
-                            rows={4}
-                            className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
+                            className={cn("mt-2 w-full rounded-2xl border px-4 py-3 text-sm outline-none", inputClass(theme))}
                           />
                         </div>
-                      )}
+                      ) : null}
 
-                      {selectedNode.type === "http_tool" && (
+                      {selectedNode.type === "http_tool" ? (
                         <>
                           <div>
-                            <label className="text-xs uppercase tracking-[0.25em] text-white/30">
+                            <label className={cn("text-xs uppercase tracking-[0.25em]", subtleClass(theme))}>
                               URL
                             </label>
                             <input
@@ -1446,18 +1535,15 @@ export function StudioShell() {
                               onChange={(event) =>
                                 updateSelectedNode((node) =>
                                   node.type === "http_tool"
-                                    ? {
-                                        ...node,
-                                        data: { ...node.data, url: event.target.value },
-                                      }
+                                    ? { ...node, data: { ...node.data, url: event.target.value } }
                                     : node,
                                 )
                               }
-                              className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
+                              className={cn("mt-2 w-full rounded-2xl border px-4 py-3 text-sm outline-none", inputClass(theme))}
                             />
                           </div>
                           <div>
-                            <label className="text-xs uppercase tracking-[0.25em] text-white/30">
+                            <label className={cn("text-xs uppercase tracking-[0.25em]", subtleClass(theme))}>
                               Method
                             </label>
                             <select
@@ -1475,51 +1561,48 @@ export function StudioShell() {
                                     : node,
                                 )
                               }
-                              className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
+                              className={cn("mt-2 w-full rounded-2xl border px-4 py-3 text-sm outline-none", inputClass(theme))}
                             >
                               <option value="GET">GET</option>
                               <option value="POST">POST</option>
                             </select>
                           </div>
                         </>
-                      )}
+                      ) : null}
 
-                      {selectedNode.type === "output" && (
+                      {selectedNode.type === "output" ? (
                         <div>
-                          <label className="text-xs uppercase tracking-[0.25em] text-white/30">
+                          <label className={cn("text-xs uppercase tracking-[0.25em]", subtleClass(theme))}>
                             Template
                           </label>
                           <textarea
+                            rows={5}
                             value={selectedNode.data.template}
                             onChange={(event) =>
                               updateSelectedNode((node) =>
                                 node.type === "output"
-                                  ? {
-                                      ...node,
-                                      data: { ...node.data, template: event.target.value },
-                                    }
+                                  ? { ...node, data: { ...node.data, template: event.target.value } }
                                   : node,
                               )
                             }
-                            rows={5}
-                            className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
+                            className={cn("mt-2 w-full rounded-2xl border px-4 py-3 text-sm outline-none", inputClass(theme))}
                           />
                         </div>
-                      )}
+                      ) : null}
                     </div>
                   ) : (
-                    <div className="mt-4 text-sm text-white/40">
+                    <div className={cn("mt-4 text-sm", mutedClass(theme))}>
                       Select a node on the canvas to configure it.
                     </div>
                   )}
                 </section>
 
-                <section className="flex min-h-0 flex-1 flex-col rounded-[28px] border border-white/8 bg-white/[0.03] p-5 backdrop-blur-xl">
+                <section className={cn("flex min-h-0 flex-1 flex-col rounded-[28px] border p-5 backdrop-blur-xl", panelClass(theme))}>
                   <div className="flex items-center justify-between">
-                    <div className="text-xs uppercase tracking-[0.32em] text-white/30">
+                    <div className={cn("text-xs uppercase tracking-[0.32em]", subtleClass(theme))}>
                       Run Trace
                     </div>
-                    {selectedRun && (
+                    {selectedRun ? (
                       <div
                         className={cn(
                           "rounded-full px-3 py-1 text-[10px] uppercase tracking-[0.28em]",
@@ -1532,28 +1615,40 @@ export function StudioShell() {
                       >
                         {selectedRun.status}
                       </div>
-                    )}
+                    ) : null}
                   </div>
                   <div className="mt-4 space-y-3 overflow-y-auto pr-1">
                     {events.length === 0 ? (
-                      <div className="rounded-2xl border border-dashed border-white/10 bg-black/15 p-4 text-sm text-white/35">
+                      <div
+                        className={cn(
+                          "rounded-2xl border border-dashed p-4 text-sm",
+                          theme === "dark"
+                            ? "border-white/10 bg-black/15 text-white/35"
+                            : "border-slate-200 bg-slate-50 text-slate-500",
+                        )}
+                      >
                         Start a run to stream node activity and outputs here.
                       </div>
                     ) : (
                       events.map((event) => (
                         <div
                           key={event.id}
-                          className="rounded-2xl border border-white/8 bg-black/20 p-3"
+                          className={cn(
+                            "rounded-2xl border p-3",
+                            theme === "dark"
+                              ? "border-white/8 bg-black/20"
+                              : "border-slate-200 bg-slate-50",
+                          )}
                         >
                           <div className="flex items-center justify-between gap-3">
-                            <div className="text-xs uppercase tracking-[0.22em] text-white/30">
+                            <div className={cn("text-xs uppercase tracking-[0.22em]", subtleClass(theme))}>
                               {event.type}
                             </div>
-                            <div className="text-[11px] text-white/25">
+                            <div className={cn("text-[11px]", theme === "dark" ? "text-white/25" : "text-slate-400")}>
                               {event.nodeId || "run"}
                             </div>
                           </div>
-                          <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-white/75">
+                          <div className={cn("mt-2 whitespace-pre-wrap text-sm leading-6", theme === "dark" ? "text-white/75" : "text-slate-700")}>
                             {event.message}
                           </div>
                         </div>
@@ -1565,6 +1660,155 @@ export function StudioShell() {
             </div>
           </main>
         </div>
+
+        {providerModalOpen && selectedProvider ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-6">
+            <div className={cn("w-full max-w-2xl rounded-[30px] border p-6 shadow-2xl", panelClass(theme), theme === "dark" ? "bg-[#10121c]" : "bg-white")}>
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className={cn("text-xs uppercase tracking-[0.3em]", subtleClass(theme))}>
+                    Edit Provider
+                  </div>
+                  <div className="mt-1 text-2xl font-medium">{selectedProvider.name}</div>
+                </div>
+                <button
+                  onClick={() => setProviderModalOpen(false)}
+                  className={cn("rounded-full border p-2", inputClass(theme))}
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <div className="mt-5 grid grid-cols-2 gap-4">
+                <div className="col-span-2">
+                  <label className={cn("text-xs uppercase tracking-[0.22em]", subtleClass(theme))}>
+                    Provider Name
+                  </label>
+                  <input
+                    value={selectedProvider.name}
+                    onChange={(event) =>
+                      updateSelectedProvider((provider) => ({
+                        ...provider,
+                        name: event.target.value,
+                      }))
+                    }
+                    className={cn("mt-2 w-full rounded-2xl border px-4 py-3 text-sm outline-none", inputClass(theme))}
+                  />
+                </div>
+                <div>
+                  <label className={cn("text-xs uppercase tracking-[0.22em]", subtleClass(theme))}>
+                    Protocol
+                  </label>
+                  <select
+                    value={selectedProvider.type}
+                    onChange={(event) =>
+                      updateSelectedProvider((provider) => ({
+                        ...provider,
+                        type: event.target.value as ProviderCredential["type"],
+                      }))
+                    }
+                    className={cn("mt-2 w-full rounded-2xl border px-4 py-3 text-sm outline-none", inputClass(theme))}
+                  >
+                    <option value="openai_compatible">openai_compatible</option>
+                    <option value="openai">openai</option>
+                    <option value="ollama">ollama</option>
+                  </select>
+                </div>
+                <div>
+                  <label className={cn("text-xs uppercase tracking-[0.22em]", subtleClass(theme))}>
+                    Default Model
+                  </label>
+                  <input
+                    value={selectedProvider.defaultModel}
+                    onChange={(event) =>
+                      updateSelectedProvider((provider) => ({
+                        ...provider,
+                        defaultModel: event.target.value,
+                      }))
+                    }
+                    className={cn("mt-2 w-full rounded-2xl border px-4 py-3 text-sm outline-none", inputClass(theme))}
+                  />
+                </div>
+                <div className="col-span-2">
+                  <label className={cn("text-xs uppercase tracking-[0.22em]", subtleClass(theme))}>
+                    Base URL
+                  </label>
+                  <input
+                    value={selectedProvider.baseUrl ?? ""}
+                    onChange={(event) =>
+                      updateSelectedProvider((provider) => ({
+                        ...provider,
+                        baseUrl: event.target.value || undefined,
+                      }))
+                    }
+                    className={cn("mt-2 w-full rounded-2xl border px-4 py-3 text-sm outline-none", inputClass(theme))}
+                  />
+                </div>
+                <div className="col-span-2">
+                  <label className={cn("text-xs uppercase tracking-[0.22em]", subtleClass(theme))}>
+                    API Key
+                  </label>
+                  <input
+                    value={selectedProvider.apiKey ?? ""}
+                    onChange={(event) =>
+                      updateSelectedProvider((provider) => ({
+                        ...provider,
+                        apiKey: event.target.value,
+                      }))
+                    }
+                    className={cn("mt-2 w-full rounded-2xl border px-4 py-3 text-sm outline-none", inputClass(theme))}
+                  />
+                  <div className={cn("mt-2 text-xs", mutedClass(theme))}>
+                    Stored locally. Current value: {maskKey(selectedProvider.apiKey)}
+                  </div>
+                </div>
+                <div className="col-span-2">
+                  <label className={cn("text-xs uppercase tracking-[0.22em]", subtleClass(theme))}>
+                    Custom Headers JSON
+                  </label>
+                  <textarea
+                    rows={4}
+                    value={providerHeadersText}
+                    onChange={(event) => {
+                      setProviderHeadersText(event.target.value);
+                      setProviderHeadersError("");
+                    }}
+                    className={cn("mt-2 w-full rounded-2xl border px-4 py-3 text-sm outline-none", inputClass(theme))}
+                  />
+                  <div
+                    className={cn(
+                      "mt-2 text-xs",
+                      providerHeadersError ? "text-rose-400" : mutedClass(theme),
+                    )}
+                  >
+                    {providerHeadersError || "Use this for vendor-specific auth or routing headers."}
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-6 flex justify-end gap-3">
+                <button
+                  onClick={() => setProviderModalOpen(false)}
+                  className={cn("rounded-full border px-4 py-2 text-sm", inputClass(theme))}
+                >
+                  Close
+                </button>
+                <button
+                  onClick={async () => {
+                    const ok = await saveSelectedProvider();
+                    if (ok) {
+                      setProviderModalOpen(false);
+                    }
+                  }}
+                  className="inline-flex items-center gap-2 rounded-full border border-indigo-400/25 bg-indigo-500/10 px-4 py-2 text-sm text-indigo-100"
+                >
+                  <Save className="h-4 w-4" />
+                  Save Provider
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </div>
     </ReactFlowProvider>
   );

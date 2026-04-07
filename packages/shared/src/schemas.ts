@@ -29,6 +29,7 @@ export const agentProfileSchema = z.object({
   id: z.string(),
   name: z.string().min(1),
   description: z.string().default(""),
+  notes: z.string().default(""),
   profileType: z.string().min(1).default("general"),
   role: agentRoleSchema,
   providerId: z.string(),
