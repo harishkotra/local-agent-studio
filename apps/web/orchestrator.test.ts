@@ -530,7 +530,7 @@ describe("executeWorkflow – node types", () => {
     expect(String(result.output)).toContain("build MVP");
   });
 
-  it("replaces undefined template variables with an empty string", async () => {
+  it("replaces unprovided template variables with an empty string", async () => {
     const result = await executeWorkflow({
       workflow: makeInputOutputWorkflow("Val: {{missing}}", ["missing"], ""),
       agents: [],

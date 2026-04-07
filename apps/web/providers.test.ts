@@ -181,7 +181,7 @@ describe("OpenAICompatibleAdapter.generate – HTTP and SSE", () => {
     expect(deltas).toEqual(["A", "B"]);
   });
 
-  it("ignores non-data SSE lines and chunks with empty delta content", async () => {
+  it("ignores SSE event-type lines, keep-alive comments, and chunks with empty delta content", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(

@@ -401,6 +401,13 @@ describe("runEventSchema", () => {
     ).toBe(false);
   });
 
+  it("parses a completed event that includes a message", () => {
+    expect(
+      runEventSchema.safeParse({ ...baseEvent, type: "completed", message: "Node finished" })
+        .success,
+    ).toBe(true);
+  });
+
   it("rejects a completed event missing message", () => {
     expect(
       runEventSchema.safeParse({ ...baseEvent, type: "completed" }).success,
