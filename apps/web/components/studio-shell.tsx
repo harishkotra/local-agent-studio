@@ -8,6 +8,7 @@ import {
   ConnectionMode,
   Controls,
   MiniMap,
+  Panel,
   ReactFlow,
   ReactFlowProvider,
   useEdgesState,
@@ -227,6 +228,10 @@ function mutedClass(theme: ThemeMode) {
 
 function subtleClass(theme: ThemeMode) {
   return theme === "dark" ? "text-white/30" : "text-slate-500";
+}
+
+function fieldLabel(theme: ThemeMode) {
+  return cn("text-xs uppercase tracking-[0.22em]", subtleClass(theme));
 }
 
 export function StudioShell() {
@@ -905,78 +910,6 @@ export function StudioShell() {
                     </div>
                     <div>
                       <label className={cn("text-xs uppercase tracking-[0.22em]", subtleClass(theme))}>
-                        Provider
-                      </label>
-                      <select
-                        value={selectedAgent.providerId}
-                        onChange={(event) =>
-                          updateSelectedAgent((agent) => {
-                            const provider = snapshot?.providers.find(
-                              (item) => item.id === event.target.value,
-                            );
-                            return {
-                              ...agent,
-                              providerId: event.target.value,
-                              model: provider ? provider.defaultModel : agent.model,
-                            };
-                          })
-                        }
-                        className={cn("mt-2 w-full rounded-2xl border px-4 py-3 text-sm outline-none", inputClass(theme))}
-                      >
-                        {snapshot?.providers.map((provider) => (
-                          <option key={provider.id} value={provider.id}>
-                            {provider.name}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div>
-                      <label className={cn("text-xs uppercase tracking-[0.22em]", subtleClass(theme))}>
-                        Model
-                      </label>
-                      {snapshot?.providers.find(
-                        (provider) => provider.id === selectedAgent.providerId,
-                      )?.type === "ollama" ? (
-                        <>
-                          <select
-                            value={selectedAgent.model}
-                            onChange={(event) =>
-                              updateSelectedAgent((agent) => ({
-                                ...agent,
-                                model: event.target.value,
-                              }))
-                            }
-                            className={cn("mt-2 w-full rounded-2xl border px-4 py-3 text-sm outline-none", inputClass(theme))}
-                          >
-                            {(ollamaModels.length > 0
-                              ? ollamaModels
-                              : [selectedAgent.model || "loading-models"]).map((model) => (
-                              <option key={model} value={model}>
-                                {model}
-                              </option>
-                            ))}
-                          </select>
-                          <div className={cn("mt-2 text-xs", mutedClass(theme))}>
-                            {ollamaModelsLoading
-                              ? "Loading locally available Ollama models..."
-                              : ollamaModelsError || "Model list is sourced from your local Ollama instance."}
-                          </div>
-                        </>
-                      ) : (
-                        <input
-                          value={selectedAgent.model}
-                          onChange={(event) =>
-                            updateSelectedAgent((agent) => ({
-                              ...agent,
-                              model: event.target.value,
-                            }))
-                          }
-                          className={cn("mt-2 w-full rounded-2xl border px-4 py-3 text-sm outline-none", inputClass(theme))}
-                        />
-                      )}
-                    </div>
-                    <div>
-                      <label className={cn("text-xs uppercase tracking-[0.22em]", subtleClass(theme))}>
                         Avatar
                       </label>
                       <input
@@ -1229,20 +1162,6 @@ export function StudioShell() {
 
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => setGridLocked((current) => !current)}
-                  className={cn("inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm", inputClass(theme))}
-                >
-                  {gridLocked ? <Lock className="h-4 w-4" /> : <LockOpen className="h-4 w-4" />}
-                  {gridLocked ? "Grid Locked" : "Grid Free"}
-                </button>
-                <button
-                  onClick={() => setTheme((current) => (current === "dark" ? "light" : "dark"))}
-                  className={cn("inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm", inputClass(theme))}
-                >
-                  {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-                  {theme === "dark" ? "Light Mode" : "Dark Mode"}
-                </button>
-                <button
                   onClick={() => addNode("agent")}
                   className={cn("inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm", inputClass(theme))}
                 >
@@ -1316,6 +1235,7 @@ export function StudioShell() {
                   onEdgesChange={onEdgesChange}
                   onConnect={onConnect}
                   nodeTypes={nodeTypes}
+                  colorMode={theme}
                   snapToGrid={gridLocked}
                   snapGrid={[24, 24]}
                   connectionMode={ConnectionMode.Loose}
@@ -1372,6 +1292,39 @@ export function StudioShell() {
                     }
                     showInteractive={false}
                   />
+                  <Panel position="top-right">
+                    <div
+                      className={cn(
+                        "flex items-center gap-2 rounded-2xl border p-2 shadow-lg backdrop-blur-xl",
+                        theme === "dark"
+                          ? "border-white/8 bg-black/45"
+                          : "border-slate-200 bg-white/90",
+                      )}
+                    >
+                      <button
+                        onClick={() => setGridLocked((current) => !current)}
+                        className={cn(
+                          "inline-flex items-center gap-2 rounded-full border px-3 py-2 text-xs uppercase tracking-[0.18em] transition",
+                          inputClass(theme),
+                        )}
+                        title={gridLocked ? "Disable grid snap" : "Enable grid snap"}
+                      >
+                        {gridLocked ? <Lock className="h-3.5 w-3.5" /> : <LockOpen className="h-3.5 w-3.5" />}
+                        {gridLocked ? "Snap On" : "Snap Off"}
+                      </button>
+                      <button
+                        onClick={() => setTheme((current) => (current === "dark" ? "light" : "dark"))}
+                        className={cn(
+                          "inline-flex items-center gap-2 rounded-full border px-3 py-2 text-xs uppercase tracking-[0.18em] transition",
+                          inputClass(theme),
+                        )}
+                        title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+                      >
+                        {theme === "dark" ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
+                        {theme === "dark" ? "Light" : "Dark"}
+                      </button>
+                    </div>
+                  </Panel>
                 </ReactFlow>
               </section>
 
@@ -1461,6 +1414,115 @@ export function StudioShell() {
                               ))}
                             </select>
                           </div>
+                          {(() => {
+                            const inspectorAgent =
+                              snapshot?.agents.find(
+                                (agent) => agent.id === selectedNode.data.agentProfileId,
+                              ) ?? null;
+                            const inspectorProvider =
+                              snapshot?.providers.find(
+                                (provider) => provider.id === inspectorAgent?.providerId,
+                              ) ?? null;
+
+                            if (!inspectorAgent) {
+                              return null;
+                            }
+
+                            return (
+                              <>
+                                <div>
+                                  <label className={fieldLabel(theme)}>Provider</label>
+                                  <select
+                                    value={inspectorAgent.providerId}
+                                    onChange={(event) =>
+                                      updateSnapshot((current) => ({
+                                        ...current,
+                                        agents: current.agents.map((agent) =>
+                                          agent.id === inspectorAgent.id
+                                            ? {
+                                                ...agent,
+                                                providerId: event.target.value,
+                                                model:
+                                                  current.providers.find(
+                                                    (provider) =>
+                                                      provider.id === event.target.value,
+                                                  )?.defaultModel ?? agent.model,
+                                                updatedAt: new Date().toISOString(),
+                                              }
+                                            : agent,
+                                        ),
+                                      }))
+                                    }
+                                    className={cn("mt-2 w-full rounded-2xl border px-4 py-3 text-sm outline-none", inputClass(theme))}
+                                  >
+                                    {snapshot?.providers.map((provider) => (
+                                      <option key={provider.id} value={provider.id}>
+                                        {provider.name}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+                                <div>
+                                  <label className={fieldLabel(theme)}>Model</label>
+                                  {inspectorProvider?.type === "ollama" ? (
+                                    <>
+                                      <select
+                                        value={inspectorAgent.model}
+                                        onChange={(event) =>
+                                          updateSnapshot((current) => ({
+                                            ...current,
+                                            agents: current.agents.map((agent) =>
+                                              agent.id === inspectorAgent.id
+                                                ? {
+                                                    ...agent,
+                                                    model: event.target.value,
+                                                    updatedAt: new Date().toISOString(),
+                                                  }
+                                                : agent,
+                                            ),
+                                          }))
+                                        }
+                                        className={cn("mt-2 w-full rounded-2xl border px-4 py-3 text-sm outline-none", inputClass(theme))}
+                                      >
+                                        {(ollamaModels.length > 0
+                                          ? ollamaModels
+                                          : [inspectorAgent.model || "loading-models"]).map((model) => (
+                                          <option key={model} value={model}>
+                                            {model}
+                                          </option>
+                                        ))}
+                                      </select>
+                                      <div className={cn("mt-2 text-xs", mutedClass(theme))}>
+                                        {ollamaModelsLoading
+                                          ? "Loading locally available Ollama models..."
+                                          : ollamaModelsError ||
+                                            "Showing models from the selected Ollama provider."}
+                                      </div>
+                                    </>
+                                  ) : (
+                                    <input
+                                      value={inspectorAgent.model}
+                                      onChange={(event) =>
+                                        updateSnapshot((current) => ({
+                                          ...current,
+                                          agents: current.agents.map((agent) =>
+                                            agent.id === inspectorAgent.id
+                                              ? {
+                                                  ...agent,
+                                                  model: event.target.value,
+                                                  updatedAt: new Date().toISOString(),
+                                                }
+                                              : agent,
+                                          ),
+                                        }))
+                                      }
+                                      className={cn("mt-2 w-full rounded-2xl border px-4 py-3 text-sm outline-none", inputClass(theme))}
+                                    />
+                                  )}
+                                </div>
+                              </>
+                            );
+                          })()}
                           <div>
                             <label className={cn("text-xs uppercase tracking-[0.25em]", subtleClass(theme))}>
                               Prompt
@@ -1662,25 +1724,50 @@ export function StudioShell() {
         </div>
 
         {providerModalOpen && selectedProvider ? (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-6">
-            <div className={cn("w-full max-w-2xl rounded-[30px] border p-6 shadow-2xl", panelClass(theme), theme === "dark" ? "bg-[#10121c]" : "bg-white")}>
-              <div className="flex items-center justify-between">
+          <div
+            className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/72 p-6 backdrop-blur-md"
+            onClick={() => setProviderModalOpen(false)}
+          >
+            <div
+              className={cn(
+                "isolate flex max-h-[88vh] w-full max-w-2xl flex-col overflow-hidden rounded-[32px] border shadow-[0_40px_120px_rgba(15,23,42,0.45)]",
+                theme === "dark"
+                  ? "border-white/10 bg-[#0f1322] text-white ring-1 ring-white/5"
+                  : "border-slate-200 bg-white text-slate-900 ring-1 ring-slate-200/80",
+              )}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div
+                className={cn(
+                  "flex items-center justify-between border-b px-6 py-5",
+                  theme === "dark" ? "border-white/8 bg-white/[0.02]" : "border-slate-200 bg-slate-50/80",
+                )}
+              >
                 <div>
                   <div className={cn("text-xs uppercase tracking-[0.3em]", subtleClass(theme))}>
                     Edit Provider
                   </div>
                   <div className="mt-1 text-2xl font-medium">{selectedProvider.name}</div>
+                  <div className={cn("mt-1 text-sm", mutedClass(theme))}>
+                    Configure connection details, authentication, and vendor-specific headers.
+                  </div>
                 </div>
                 <button
                   onClick={() => setProviderModalOpen(false)}
-                  className={cn("rounded-full border p-2", inputClass(theme))}
+                  className={cn(
+                    "rounded-full border p-2 transition",
+                    theme === "dark"
+                      ? "border-white/10 bg-white/[0.04] hover:bg-white/[0.08]"
+                      : "border-slate-200 bg-white hover:bg-slate-50",
+                  )}
                 >
                   <X className="h-4 w-4" />
                 </button>
               </div>
 
-              <div className="mt-5 grid grid-cols-2 gap-4">
-                <div className="col-span-2">
+              <div className="overflow-y-auto px-6 py-5">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="col-span-2">
                   <label className={cn("text-xs uppercase tracking-[0.22em]", subtleClass(theme))}>
                     Provider Name
                   </label>
@@ -1694,8 +1781,8 @@ export function StudioShell() {
                     }
                     className={cn("mt-2 w-full rounded-2xl border px-4 py-3 text-sm outline-none", inputClass(theme))}
                   />
-                </div>
-                <div>
+                  </div>
+                  <div>
                   <label className={cn("text-xs uppercase tracking-[0.22em]", subtleClass(theme))}>
                     Protocol
                   </label>
@@ -1713,8 +1800,8 @@ export function StudioShell() {
                     <option value="openai">openai</option>
                     <option value="ollama">ollama</option>
                   </select>
-                </div>
-                <div>
+                  </div>
+                  <div>
                   <label className={cn("text-xs uppercase tracking-[0.22em]", subtleClass(theme))}>
                     Default Model
                   </label>
@@ -1728,8 +1815,8 @@ export function StudioShell() {
                     }
                     className={cn("mt-2 w-full rounded-2xl border px-4 py-3 text-sm outline-none", inputClass(theme))}
                   />
-                </div>
-                <div className="col-span-2">
+                  </div>
+                  <div className="col-span-2">
                   <label className={cn("text-xs uppercase tracking-[0.22em]", subtleClass(theme))}>
                     Base URL
                   </label>
@@ -1743,8 +1830,8 @@ export function StudioShell() {
                     }
                     className={cn("mt-2 w-full rounded-2xl border px-4 py-3 text-sm outline-none", inputClass(theme))}
                   />
-                </div>
-                <div className="col-span-2">
+                  </div>
+                  <div className="col-span-2">
                   <label className={cn("text-xs uppercase tracking-[0.22em]", subtleClass(theme))}>
                     API Key
                   </label>
@@ -1761,8 +1848,8 @@ export function StudioShell() {
                   <div className={cn("mt-2 text-xs", mutedClass(theme))}>
                     Stored locally. Current value: {maskKey(selectedProvider.apiKey)}
                   </div>
-                </div>
-                <div className="col-span-2">
+                  </div>
+                  <div className="col-span-2">
                   <label className={cn("text-xs uppercase tracking-[0.22em]", subtleClass(theme))}>
                     Custom Headers JSON
                   </label>
@@ -1783,13 +1870,24 @@ export function StudioShell() {
                   >
                     {providerHeadersError || "Use this for vendor-specific auth or routing headers."}
                   </div>
+                  </div>
                 </div>
               </div>
 
-              <div className="mt-6 flex justify-end gap-3">
+              <div
+                className={cn(
+                  "flex justify-end gap-3 border-t px-6 py-4",
+                  theme === "dark" ? "border-white/8 bg-white/[0.02]" : "border-slate-200 bg-slate-50/80",
+                )}
+              >
                 <button
                   onClick={() => setProviderModalOpen(false)}
-                  className={cn("rounded-full border px-4 py-2 text-sm", inputClass(theme))}
+                  className={cn(
+                    "rounded-full border px-4 py-2 text-sm transition",
+                    theme === "dark"
+                      ? "border-white/10 bg-white/[0.04] text-white/80 hover:bg-white/[0.08]"
+                      : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50",
+                  )}
                 >
                   Close
                 </button>
