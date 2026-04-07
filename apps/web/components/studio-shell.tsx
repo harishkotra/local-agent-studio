@@ -251,6 +251,9 @@ export function StudioShell() {
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
   const [ollamaModelsLoading, setOllamaModelsLoading] = useState(false);
   const [ollamaModelsError, setOllamaModelsError] = useState("");
+  const [providerOllamaModels, setProviderOllamaModels] = useState<string[]>([]);
+  const [providerOllamaModelsLoading, setProviderOllamaModelsLoading] = useState(false);
+  const [providerOllamaModelsError, setProviderOllamaModelsError] = useState("");
   const [nodeStatuses, setNodeStatuses] = useState<Record<string, StudioNodeData["status"]>>(
     {},
   );
@@ -400,6 +403,48 @@ export function StudioShell() {
 
     void loadOllamaModels();
   }, [selectedAgent, snapshot]);
+
+  useEffect(() => {
+    async function loadProviderOllamaModels() {
+      if (!selectedProvider || !providerModalOpen || selectedProvider.type !== "ollama") {
+        setProviderOllamaModels([]);
+        setProviderOllamaModelsError("");
+        setProviderOllamaModelsLoading(false);
+        return;
+      }
+
+      setProviderOllamaModelsLoading(true);
+      setProviderOllamaModelsError("");
+      try {
+        const response = await fetch("/api/providers/models", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(selectedProvider),
+        });
+        const json = (await response.json()) as {
+          models?: string[];
+          error?: string;
+        };
+        setProviderOllamaModels(json.models ?? []);
+        setProviderOllamaModelsError(json.error ?? "");
+      } catch (error) {
+        setProviderOllamaModels([]);
+        setProviderOllamaModelsError(
+          error instanceof Error ? error.message : "Unable to load local models.",
+        );
+      } finally {
+        setProviderOllamaModelsLoading(false);
+      }
+    }
+
+    void loadProviderOllamaModels();
+  }, [
+    providerModalOpen,
+    selectedProvider?.id,
+    selectedProvider?.type,
+    selectedProvider?.baseUrl,
+    selectedProvider?.customHeaders,
+  ]);
 
   const onConnect = useMemo<OnConnect>(
     () => (connection) =>
@@ -1801,20 +1846,49 @@ export function StudioShell() {
                     <option value="ollama">ollama</option>
                   </select>
                   </div>
-                  <div>
+                <div>
                   <label className={cn("text-xs uppercase tracking-[0.22em]", subtleClass(theme))}>
                     Default Model
                   </label>
-                  <input
-                    value={selectedProvider.defaultModel}
-                    onChange={(event) =>
-                      updateSelectedProvider((provider) => ({
-                        ...provider,
-                        defaultModel: event.target.value,
-                      }))
-                    }
-                    className={cn("mt-2 w-full rounded-2xl border px-4 py-3 text-sm outline-none", inputClass(theme))}
-                  />
+                  {selectedProvider.type === "ollama" ? (
+                    <>
+                      <select
+                        value={selectedProvider.defaultModel}
+                        onChange={(event) =>
+                          updateSelectedProvider((provider) => ({
+                            ...provider,
+                            defaultModel: event.target.value,
+                          }))
+                        }
+                        className={cn("mt-2 w-full rounded-2xl border px-4 py-3 text-sm outline-none", inputClass(theme))}
+                      >
+                        {(providerOllamaModels.length > 0
+                          ? providerOllamaModels
+                          : [selectedProvider.defaultModel || "loading-models"]).map((model) => (
+                          <option key={model} value={model}>
+                            {model}
+                          </option>
+                        ))}
+                      </select>
+                      <div className={cn("mt-2 text-xs", mutedClass(theme))}>
+                        {providerOllamaModelsLoading
+                          ? "Loading locally available Ollama models..."
+                          : providerOllamaModelsError ||
+                            "Showing models discovered from this Ollama provider."}
+                      </div>
+                    </>
+                  ) : (
+                    <input
+                      value={selectedProvider.defaultModel}
+                      onChange={(event) =>
+                        updateSelectedProvider((provider) => ({
+                          ...provider,
+                          defaultModel: event.target.value,
+                        }))
+                      }
+                      className={cn("mt-2 w-full rounded-2xl border px-4 py-3 text-sm outline-none", inputClass(theme))}
+                    />
+                  )}
                   </div>
                   <div className="col-span-2">
                   <label className={cn("text-xs uppercase tracking-[0.22em]", subtleClass(theme))}>
