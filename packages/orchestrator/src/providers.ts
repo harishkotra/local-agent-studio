@@ -109,6 +109,7 @@ class OpenAICompatibleAdapter implements ChatModelAdapter {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        ...this.provider.customHeaders,
         ...(this.provider.apiKey
           ? { Authorization: `Bearer ${this.provider.apiKey}` }
           : {}),

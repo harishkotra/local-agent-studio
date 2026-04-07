@@ -12,7 +12,9 @@ export const providerCredentialSchema = z.object({
   type: providerTypeSchema,
   baseUrl: z.string().url().optional(),
   apiKey: z.string().optional(),
+  customHeaders: z.record(z.string()).default({}),
   defaultModel: z.string().min(1),
+  isDemo: z.boolean().default(false),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -27,6 +29,7 @@ export const agentProfileSchema = z.object({
   id: z.string(),
   name: z.string().min(1),
   description: z.string().default(""),
+  profileType: z.string().min(1).default("general"),
   role: agentRoleSchema,
   providerId: z.string(),
   model: z.string().min(1),
@@ -36,6 +39,7 @@ export const agentProfileSchema = z.object({
   outputMode: outputModeSchema.default("text"),
   allowedTools: z.array(z.string()).default([]),
   avatar: z.string().default(""),
+  isDemo: z.boolean().default(false),
   createdAt: z.string(),
   updatedAt: z.string(),
 });

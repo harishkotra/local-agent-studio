@@ -61,7 +61,7 @@ function asFlowNode(
   agents: AgentProfile[],
   providers: ProviderCredential[],
   statuses: Record<string, StudioNodeData["status"]>,
-): Node<StudioNodeData> {
+): StudioFlowNode {
   const agent =
     node.type === "agent"
       ? agents.find((item) => item.id === node.data.agentProfileId)
@@ -81,7 +81,9 @@ function asFlowNode(
       status: statuses[node.id] ?? "idle",
       agent,
       provider,
-      subtitle: agent ? `${agent.model} · ${provider?.name ?? "provider"}` : node.type,
+      subtitle: agent
+        ? `${agent.model} · ${provider?.name ?? "provider"} · ${agent.profileType}`
+        : node.type,
       tools:
         node.type === "agent"
           ? agent?.allowedTools
@@ -119,7 +121,7 @@ function workflowToFlow(
 
 function flowToWorkflow(
   base: WorkflowDefinition,
-  nodes: Node<StudioNodeData>[],
+  nodes: StudioFlowNode[],
   edges: Edge[],
 ): WorkflowDefinition {
   const baseNodes = new Map(base.nodes.map((node) => [node.id, node]));
@@ -164,13 +166,31 @@ function maskKey(value?: string) {
   return `${value.slice(0, 3)}••••${value.slice(-3)}`;
 }
 
+function headersToText(headers: Record<string, string>) {
+  return Object.keys(headers).length === 0 ? "{}" : JSON.stringify(headers, null, 2);
+}
+
+function parseHeadersText(value: string) {
+  if (!value.trim()) {
+    return {} as Record<string, string>;
+  }
+  const parsed = JSON.parse(value) as Record<string, unknown>;
+  return Object.fromEntries(
+    Object.entries(parsed).map(([key, headerValue]) => [key, String(headerValue)]),
+  );
+}
+
 export function StudioShell() {
   const [snapshot, setSnapshot] = useState<StudioSnapshot | null>(null);
   const [runs, setRuns] = useState<RunRecord[]>([]);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string>("");
   const [selectedNodeId, setSelectedNodeId] = useState<string>("");
+  const [selectedAgentId, setSelectedAgentId] = useState<string>("");
+  const [selectedProviderId, setSelectedProviderId] = useState<string>("");
   const [selectedRun, setSelectedRun] = useState<RunRecord | null>(null);
   const [events, setEvents] = useState<RunEvent[]>([]);
+  const [providerHeadersText, setProviderHeadersText] = useState("{}");
+  const [providerHeadersError, setProviderHeadersError] = useState<string>("");
   const [nodeStatuses, setNodeStatuses] = useState<Record<string, StudioNodeData["status"]>>(
     {},
   );
@@ -195,6 +215,8 @@ export function StudioShell() {
     setSnapshot(studioJson);
     setRuns(runsJson);
     setSelectedWorkflowId((current) => current || studioJson.workflows[0]?.id || "");
+    setSelectedAgentId((current) => current || studioJson.agents[0]?.id || "");
+    setSelectedProviderId((current) => current || studioJson.providers[0]?.id || "");
   };
 
   useEffect(() => {
@@ -216,6 +238,18 @@ export function StudioShell() {
     setSelectedNodeId((current) => current || flow.nodes[0]?.id || "");
   }, [workflow, snapshot, nodeStatuses, setEdges, setNodes]);
 
+  useEffect(() => {
+    if (!snapshot) {
+      return;
+    }
+    if (!snapshot.agents.find((agent) => agent.id === selectedAgentId)) {
+      setSelectedAgentId(snapshot.agents[0]?.id ?? "");
+    }
+    if (!snapshot.providers.find((provider) => provider.id === selectedProviderId)) {
+      setSelectedProviderId(snapshot.providers[0]?.id ?? "");
+    }
+  }, [snapshot, selectedAgentId, selectedProviderId]);
+
   const selectedNode = useMemo(
     () => workflow?.nodes.find((node) => node.id === selectedNodeId) ?? null,
     [workflow, selectedNodeId],
@@ -225,6 +259,27 @@ export function StudioShell() {
     () => nodes.find((node) => node.id === selectedNodeId) ?? null,
     [nodes, selectedNodeId],
   );
+
+  const selectedAgent = useMemo(
+    () => snapshot?.agents.find((agent) => agent.id === selectedAgentId) ?? null,
+    [snapshot, selectedAgentId],
+  );
+
+  const selectedProvider = useMemo(
+    () =>
+      snapshot?.providers.find((provider) => provider.id === selectedProviderId) ?? null,
+    [snapshot, selectedProviderId],
+  );
+
+  useEffect(() => {
+    if (!selectedProvider) {
+      setProviderHeadersText("{}");
+      setProviderHeadersError("");
+      return;
+    }
+    setProviderHeadersText(headersToText(selectedProvider.customHeaders));
+    setProviderHeadersError("");
+  }, [selectedProvider]);
 
   const onConnect = useMemo<OnConnect>(
     () => (connection) =>
@@ -243,27 +298,8 @@ export function StudioShell() {
     [setEdges],
   );
 
-  async function saveWorkflow() {
-    if (!workflow) {
-      return;
-    }
-    const next = flowToWorkflow(workflow, nodes, edges);
-    const response = await fetch("/api/workflows", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(next),
-    });
-    const saved = (await response.json()) as WorkflowDefinition;
-    setSnapshot((current) =>
-      current
-        ? {
-            ...current,
-            workflows: current.workflows.map((item) =>
-              item.id === saved.id ? saved : item,
-            ),
-          }
-        : current,
-    );
+  function updateSnapshot(mutator: (current: StudioSnapshot) => StudioSnapshot) {
+    setSnapshot((current) => (current ? mutator(current) : current));
   }
 
   function updateSelectedNode(mutator: (node: WorkflowNode) => WorkflowNode) {
@@ -277,16 +313,114 @@ export function StudioShell() {
       ),
       updatedAt: new Date().toISOString(),
     };
-    setSnapshot((current) =>
-      current
-        ? {
-            ...current,
-            workflows: current.workflows.map((item) =>
-              item.id === workflow.id ? nextWorkflow : item,
-            ),
-          }
-        : current,
-    );
+    updateSnapshot((current) => ({
+      ...current,
+      workflows: current.workflows.map((item) =>
+        item.id === workflow.id ? nextWorkflow : item,
+      ),
+    }));
+  }
+
+  function updateSelectedAgent(mutator: (agent: AgentProfile) => AgentProfile) {
+    if (!selectedAgent) {
+      return;
+    }
+    updateSnapshot((current) => ({
+      ...current,
+      agents: current.agents.map((agent) =>
+        agent.id === selectedAgent.id
+          ? mutator({
+              ...agent,
+              updatedAt: new Date().toISOString(),
+            })
+          : agent,
+      ),
+    }));
+  }
+
+  function updateSelectedProvider(
+    mutator: (provider: ProviderCredential) => ProviderCredential,
+  ) {
+    if (!selectedProvider) {
+      return;
+    }
+    updateSnapshot((current) => ({
+      ...current,
+      providers: current.providers.map((provider) =>
+        provider.id === selectedProvider.id
+          ? mutator({
+              ...provider,
+              updatedAt: new Date().toISOString(),
+            })
+          : provider,
+      ),
+    }));
+  }
+
+  async function saveWorkflow() {
+    if (!workflow) {
+      return;
+    }
+    const next = flowToWorkflow(workflow, nodes, edges);
+    const response = await fetch("/api/workflows", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(next),
+    });
+    const saved = (await response.json()) as WorkflowDefinition;
+    updateSnapshot((current) => ({
+      ...current,
+      workflows: current.workflows.map((item) => (item.id === saved.id ? saved : item)),
+    }));
+  }
+
+  async function saveSelectedAgent() {
+    if (!selectedAgent) {
+      return;
+    }
+    const response = await fetch("/api/agents", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(selectedAgent),
+    });
+    const saved = (await response.json()) as AgentProfile;
+    updateSnapshot((current) => ({
+      ...current,
+      agents: current.agents.map((agent) => (agent.id === saved.id ? saved : agent)),
+    }));
+  }
+
+  async function saveSelectedProvider() {
+    if (!selectedProvider) {
+      return;
+    }
+
+    try {
+      const customHeaders = parseHeadersText(providerHeadersText);
+      setProviderHeadersError("");
+      const payload: ProviderCredential = {
+        ...selectedProvider,
+        customHeaders,
+        updatedAt: new Date().toISOString(),
+      };
+      const response = await fetch("/api/providers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const saved = (await response.json()) as ProviderCredential;
+      updateSnapshot((current) => ({
+        ...current,
+        providers: current.providers.map((provider) =>
+          provider.id === saved.id ? saved : provider,
+        ),
+      }));
+      setProviderHeadersText(headersToText(saved.customHeaders));
+    } catch (error) {
+      setProviderHeadersError(
+        error instanceof Error ? error.message : "Headers must be valid JSON.",
+      );
+    }
   }
 
   function addNode(type: WorkflowNode["type"]) {
@@ -315,7 +449,7 @@ export function StudioShell() {
           description: "Worker node",
           position: { x: 420, y: 120 },
           data: {
-            agentProfileId: snapshot?.agents[0]?.id ?? "",
+            agentProfileId: selectedAgentId || snapshot?.agents[0]?.id || "",
             prompt: "Complete the assigned task.",
           },
         };
@@ -362,72 +496,84 @@ export function StudioShell() {
         break;
     }
 
-    setSnapshot((current) =>
-      current
-        ? {
-            ...current,
-            workflows: current.workflows.map((item) =>
-              item.id === workflow.id
-                ? {
-                    ...item,
-                    nodes: [...item.nodes, nextNode],
-                    updatedAt: new Date().toISOString(),
-                  }
-                : item,
-            ),
-          }
-        : current,
-    );
+    updateSnapshot((current) => ({
+      ...current,
+      workflows: current.workflows.map((item) =>
+        item.id === workflow.id
+          ? {
+              ...item,
+              nodes: [...item.nodes, nextNode],
+              updatedAt: new Date().toISOString(),
+            }
+          : item,
+      ),
+    }));
     setSelectedNodeId(id);
   }
 
   async function createAgent() {
-    if (!snapshot?.providers[0]) {
+    const provider = snapshot?.providers[0];
+    if (!provider) {
       return;
     }
     const now = new Date().toISOString();
     const agent: AgentProfile = {
       id: crypto.randomUUID(),
-      name: `Worker ${snapshot.agents.length + 1}`,
-      description: "New agent profile",
+      name: `Custom Profile ${snapshot.agents.length + 1}`,
+      description: "User-defined agent profile",
+      profileType: "custom",
       role: "worker",
-      providerId: snapshot.providers[0].id,
-      model: snapshot.providers[0].defaultModel,
-      systemPrompt: "You are a helpful worker agent.",
+      providerId: provider.id,
+      model: provider.defaultModel,
+      systemPrompt: "You are a user-defined agent profile.",
       temperature: 0.4,
       maxTokens: 800,
       outputMode: "text",
       allowedTools: [],
       avatar: "🤖",
+      isDemo: false,
       createdAt: now,
       updatedAt: now,
     };
-    await fetch("/api/agents", {
+    const response = await fetch("/api/agents", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(agent),
     });
-    await loadStudioRef.current();
+    const saved = (await response.json()) as AgentProfile;
+    updateSnapshot((current) => ({
+      ...current,
+      agents: [...current.agents, saved],
+    }));
+    setSelectedAgentId(saved.id);
   }
 
   async function createProvider() {
     const now = new Date().toISOString();
     const provider: ProviderCredential = {
       id: crypto.randomUUID(),
-      name: "Custom OpenAI-Compatible",
+      name: `Custom Provider ${(snapshot?.providers.length ?? 0) + 1}`,
       type: "openai_compatible",
       baseUrl: "https://api.example.com/v1",
       apiKey: "",
+      customHeaders: {},
       defaultModel: "model-name",
+      isDemo: false,
       createdAt: now,
       updatedAt: now,
     };
-    await fetch("/api/providers", {
+    const response = await fetch("/api/providers", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(provider),
     });
-    await loadStudioRef.current();
+    const saved = (await response.json()) as ProviderCredential;
+    updateSnapshot((current) => ({
+      ...current,
+      providers: [...current.providers, saved],
+    }));
+    setSelectedProviderId(saved.id);
+    setProviderHeadersText(headersToText(saved.customHeaders));
   }
 
   async function exportStudio() {
@@ -482,9 +628,10 @@ export function StudioShell() {
         if ("runId" in event) {
           setEvents((current) => [...current, event]);
           if (event.nodeId) {
+            const nodeId = event.nodeId;
             setNodeStatuses((current) => ({
               ...current,
-              [event.nodeId!]:
+              [nodeId]:
                 event.type === "queued"
                   ? "queued"
                   : event.type === "started"
@@ -493,7 +640,7 @@ export function StudioShell() {
                       ? "completed"
                       : event.type === "failed"
                         ? "failed"
-                        : current[event.nodeId!] ?? "running",
+                        : current[nodeId] ?? "running",
             }));
           }
         }
@@ -508,16 +655,19 @@ export function StudioShell() {
   return (
     <ReactFlowProvider>
       <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(85,99,255,0.18),_transparent_30%),linear-gradient(180deg,_#0b0b14_0%,_#090910_100%)] text-white">
-        <div className="mx-auto flex min-h-screen max-w-[1600px] gap-4 p-4">
-          <aside className="flex w-[320px] shrink-0 flex-col gap-4">
+        <div className="mx-auto flex min-h-screen max-w-[1680px] gap-4 p-4">
+          <aside className="flex w-[390px] shrink-0 flex-col gap-4">
             <section className="rounded-[24px] border border-white/8 bg-white/[0.03] p-4 shadow-[0_20px_60px_rgba(0,0,0,0.35)] backdrop-blur-xl">
               <div className="flex items-center justify-between">
                 <div>
                   <div className="text-xs uppercase tracking-[0.3em] text-white/30">
-                    Agents
+                    Profiles
                   </div>
                   <div className="mt-1 text-2xl font-medium">
                     {snapshot?.agents.length ?? 0}
+                  </div>
+                  <div className="mt-1 text-sm text-white/35">
+                    Each profile chooses its own provider and model.
                   </div>
                 </div>
                 <button
@@ -527,37 +677,283 @@ export function StudioShell() {
                   <Plus className="h-4 w-4" />
                 </button>
               </div>
-              <div className="mt-4 space-y-3">
+              <div className="mt-4 grid gap-3">
                 {snapshot?.agents.map((agent) => {
                   const provider = snapshot.providers.find(
                     (item) => item.id === agent.providerId,
                   );
                   return (
-                    <div
+                    <button
                       key={agent.id}
-                      className="rounded-2xl border border-white/8 bg-black/20 p-3"
+                      onClick={() => setSelectedAgentId(agent.id)}
+                      className={cn(
+                        "rounded-2xl border bg-black/20 p-3 text-left transition",
+                        selectedAgentId === agent.id
+                          ? "border-indigo-400/40 bg-indigo-500/10"
+                          : "border-white/8 hover:border-white/16",
+                      )}
                     >
                       <div className="flex items-center gap-3">
                         <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan-300 to-emerald-300 text-slate-950">
                           {agent.avatar || "🤖"}
                         </div>
-                        <div className="min-w-0">
-                          <div className="truncate text-sm font-medium">{agent.name}</div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <div className="truncate text-sm font-medium">{agent.name}</div>
+                            {agent.isDemo ? (
+                              <span className="rounded-full border border-cyan-400/25 bg-cyan-400/10 px-2 py-0.5 text-[10px] uppercase tracking-[0.18em] text-cyan-200">
+                                demo
+                              </span>
+                            ) : null}
+                          </div>
                           <div className="truncate text-xs text-white/35">
-                            {agent.model} · {provider?.name}
+                            {agent.profileType} · {agent.model} · {provider?.name}
                           </div>
                         </div>
                       </div>
-                    </div>
+                    </button>
                   );
                 })}
               </div>
+              {selectedAgent ? (
+                <div className="mt-4 space-y-3 rounded-2xl border border-white/8 bg-black/20 p-4">
+                  <div className="flex items-center justify-between">
+                    <div className="text-xs uppercase tracking-[0.26em] text-white/30">
+                      Edit Profile
+                    </div>
+                    <button
+                      onClick={saveSelectedAgent}
+                      className="inline-flex items-center gap-2 rounded-full border border-indigo-400/25 bg-indigo-500/10 px-3 py-1.5 text-xs uppercase tracking-[0.18em] text-indigo-100"
+                    >
+                      <Save className="h-3.5 w-3.5" />
+                      Save
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="col-span-2">
+                      <label className="text-xs uppercase tracking-[0.22em] text-white/30">
+                        Name
+                      </label>
+                      <input
+                        value={selectedAgent.name}
+                        onChange={(event) =>
+                          updateSelectedAgent((agent) => ({
+                            ...agent,
+                            name: event.target.value,
+                          }))
+                        }
+                        className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs uppercase tracking-[0.22em] text-white/30">
+                        Profile Type
+                      </label>
+                      <input
+                        value={selectedAgent.profileType}
+                        onChange={(event) =>
+                          updateSelectedAgent((agent) => ({
+                            ...agent,
+                            profileType: event.target.value,
+                          }))
+                        }
+                        className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs uppercase tracking-[0.22em] text-white/30">
+                        Role
+                      </label>
+                      <select
+                        value={selectedAgent.role}
+                        onChange={(event) =>
+                          updateSelectedAgent((agent) => ({
+                            ...agent,
+                            role: event.target.value as AgentProfile["role"],
+                          }))
+                        }
+                        className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
+                      >
+                        <option value="worker">worker</option>
+                        <option value="coordinator">coordinator</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-xs uppercase tracking-[0.22em] text-white/30">
+                        Provider
+                      </label>
+                      <select
+                        value={selectedAgent.providerId}
+                        onChange={(event) =>
+                          updateSelectedAgent((agent) => {
+                            const provider = snapshot?.providers.find(
+                              (item) => item.id === event.target.value,
+                            );
+                            return {
+                              ...agent,
+                              providerId: event.target.value,
+                              model: provider ? provider.defaultModel : agent.model,
+                            };
+                          })
+                        }
+                        className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
+                      >
+                        {snapshot?.providers.map((provider) => (
+                          <option key={provider.id} value={provider.id}>
+                            {provider.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-xs uppercase tracking-[0.22em] text-white/30">
+                        Model
+                      </label>
+                      <input
+                        value={selectedAgent.model}
+                        onChange={(event) =>
+                          updateSelectedAgent((agent) => ({
+                            ...agent,
+                            model: event.target.value,
+                          }))
+                        }
+                        className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs uppercase tracking-[0.22em] text-white/30">
+                        Avatar
+                      </label>
+                      <input
+                        value={selectedAgent.avatar}
+                        onChange={(event) =>
+                          updateSelectedAgent((agent) => ({
+                            ...agent,
+                            avatar: event.target.value,
+                          }))
+                        }
+                        className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
+                      />
+                    </div>
+                    <div className="col-span-2">
+                      <label className="text-xs uppercase tracking-[0.22em] text-white/30">
+                        Description
+                      </label>
+                      <textarea
+                        rows={2}
+                        value={selectedAgent.description}
+                        onChange={(event) =>
+                          updateSelectedAgent((agent) => ({
+                            ...agent,
+                            description: event.target.value,
+                          }))
+                        }
+                        className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
+                      />
+                    </div>
+                    <div className="col-span-2">
+                      <label className="text-xs uppercase tracking-[0.22em] text-white/30">
+                        System Prompt
+                      </label>
+                      <textarea
+                        rows={5}
+                        value={selectedAgent.systemPrompt}
+                        onChange={(event) =>
+                          updateSelectedAgent((agent) => ({
+                            ...agent,
+                            systemPrompt: event.target.value,
+                          }))
+                        }
+                        className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs uppercase tracking-[0.22em] text-white/30">
+                        Temperature
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        max="2"
+                        step="0.1"
+                        value={selectedAgent.temperature}
+                        onChange={(event) =>
+                          updateSelectedAgent((agent) => ({
+                            ...agent,
+                            temperature: Number(event.target.value) || 0,
+                          }))
+                        }
+                        className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs uppercase tracking-[0.22em] text-white/30">
+                        Max Tokens
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        step="1"
+                        value={selectedAgent.maxTokens}
+                        onChange={(event) =>
+                          updateSelectedAgent((agent) => ({
+                            ...agent,
+                            maxTokens: Number(event.target.value) || 1,
+                          }))
+                        }
+                        className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs uppercase tracking-[0.22em] text-white/30">
+                        Output Mode
+                      </label>
+                      <select
+                        value={selectedAgent.outputMode}
+                        onChange={(event) =>
+                          updateSelectedAgent((agent) => ({
+                            ...agent,
+                            outputMode: event.target.value as AgentProfile["outputMode"],
+                          }))
+                        }
+                        className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
+                      >
+                        <option value="text">text</option>
+                        <option value="json">json</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-xs uppercase tracking-[0.22em] text-white/30">
+                        Allowed Tools
+                      </label>
+                      <input
+                        value={selectedAgent.allowedTools.join(", ")}
+                        onChange={(event) =>
+                          updateSelectedAgent((agent) => ({
+                            ...agent,
+                            allowedTools: event.target.value
+                              .split(",")
+                              .map((item) => item.trim())
+                              .filter(Boolean),
+                          }))
+                        }
+                        className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
+                      />
+                    </div>
+                  </div>
+                </div>
+              ) : null}
             </section>
 
             <section className="rounded-[24px] border border-white/8 bg-white/[0.03] p-4 backdrop-blur-xl">
               <div className="flex items-center justify-between">
-                <div className="text-xs uppercase tracking-[0.3em] text-white/30">
-                  Providers
+                <div>
+                  <div className="text-xs uppercase tracking-[0.3em] text-white/30">
+                    Providers
+                  </div>
+                  <div className="mt-1 text-sm text-white/35">
+                    OpenAI, Ollama, OpenAI-compatible, or any custom endpoint you want to wire.
+                  </div>
                 </div>
                 <button
                   onClick={createProvider}
@@ -566,25 +962,159 @@ export function StudioShell() {
                   <Plus className="h-4 w-4" />
                 </button>
               </div>
-              <div className="mt-4 space-y-3">
+              <div className="mt-4 grid gap-3">
                 {snapshot?.providers.map((provider) => (
-                  <div
+                  <button
                     key={provider.id}
-                    className="rounded-2xl border border-white/8 bg-black/20 p-3"
+                    onClick={() => setSelectedProviderId(provider.id)}
+                    className={cn(
+                      "rounded-2xl border bg-black/20 p-3 text-left transition",
+                      selectedProviderId === provider.id
+                        ? "border-indigo-400/40 bg-indigo-500/10"
+                        : "border-white/8 hover:border-white/16",
+                    )}
                   >
                     <div className="flex items-center gap-2 text-sm font-medium">
                       <Server className="h-4 w-4 text-cyan-300" />
                       {provider.name}
+                      {provider.isDemo ? (
+                        <span className="rounded-full border border-cyan-400/25 bg-cyan-400/10 px-2 py-0.5 text-[10px] uppercase tracking-[0.18em] text-cyan-200">
+                          demo
+                        </span>
+                      ) : null}
                     </div>
                     <div className="mt-1 text-xs text-white/35">
                       {provider.type} · {provider.defaultModel}
                     </div>
-                    <div className="mt-2 text-xs text-white/45">
-                      key {maskKey(provider.apiKey)}
+                    <div className="mt-1 truncate text-xs text-white/28">
+                      {provider.baseUrl || "OpenAI default endpoint"}
                     </div>
-                  </div>
+                  </button>
                 ))}
               </div>
+              {selectedProvider ? (
+                <div className="mt-4 space-y-3 rounded-2xl border border-white/8 bg-black/20 p-4">
+                  <div className="flex items-center justify-between">
+                    <div className="text-xs uppercase tracking-[0.26em] text-white/30">
+                      Edit Provider
+                    </div>
+                    <button
+                      onClick={saveSelectedProvider}
+                      className="inline-flex items-center gap-2 rounded-full border border-indigo-400/25 bg-indigo-500/10 px-3 py-1.5 text-xs uppercase tracking-[0.18em] text-indigo-100"
+                    >
+                      <Save className="h-3.5 w-3.5" />
+                      Save
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="col-span-2">
+                      <label className="text-xs uppercase tracking-[0.22em] text-white/30">
+                        Provider Name
+                      </label>
+                      <input
+                        value={selectedProvider.name}
+                        onChange={(event) =>
+                          updateSelectedProvider((provider) => ({
+                            ...provider,
+                            name: event.target.value,
+                          }))
+                        }
+                        className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs uppercase tracking-[0.22em] text-white/30">
+                        Protocol
+                      </label>
+                      <select
+                        value={selectedProvider.type}
+                        onChange={(event) =>
+                          updateSelectedProvider((provider) => ({
+                            ...provider,
+                            type: event.target.value as ProviderCredential["type"],
+                          }))
+                        }
+                        className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
+                      >
+                        <option value="openai_compatible">openai_compatible</option>
+                        <option value="openai">openai</option>
+                        <option value="ollama">ollama</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-xs uppercase tracking-[0.22em] text-white/30">
+                        Default Model
+                      </label>
+                      <input
+                        value={selectedProvider.defaultModel}
+                        onChange={(event) =>
+                          updateSelectedProvider((provider) => ({
+                            ...provider,
+                            defaultModel: event.target.value,
+                          }))
+                        }
+                        className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
+                      />
+                    </div>
+                    <div className="col-span-2">
+                      <label className="text-xs uppercase tracking-[0.22em] text-white/30">
+                        Base URL
+                      </label>
+                      <input
+                        value={selectedProvider.baseUrl ?? ""}
+                        onChange={(event) =>
+                          updateSelectedProvider((provider) => ({
+                            ...provider,
+                            baseUrl: event.target.value || undefined,
+                          }))
+                        }
+                        className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
+                      />
+                    </div>
+                    <div className="col-span-2">
+                      <label className="text-xs uppercase tracking-[0.22em] text-white/30">
+                        API Key
+                      </label>
+                      <input
+                        value={selectedProvider.apiKey ?? ""}
+                        onChange={(event) =>
+                          updateSelectedProvider((provider) => ({
+                            ...provider,
+                            apiKey: event.target.value,
+                          }))
+                        }
+                        className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
+                      />
+                      <div className="mt-2 text-xs text-white/35">
+                        Stored locally. Current value: {maskKey(selectedProvider.apiKey)}
+                      </div>
+                    </div>
+                    <div className="col-span-2">
+                      <label className="text-xs uppercase tracking-[0.22em] text-white/30">
+                        Custom Headers JSON
+                      </label>
+                      <textarea
+                        rows={4}
+                        value={providerHeadersText}
+                        onChange={(event) => {
+                          setProviderHeadersText(event.target.value);
+                          setProviderHeadersError("");
+                        }}
+                        className="mt-2 w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm outline-none"
+                      />
+                      {providerHeadersError ? (
+                        <div className="mt-2 text-xs text-rose-300">
+                          {providerHeadersError}
+                        </div>
+                      ) : (
+                        <div className="mt-2 text-xs text-white/35">
+                          Use this for vendor-specific auth or routing headers.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
             </section>
 
             <section className="rounded-[24px] border border-white/8 bg-white/[0.03] p-4 backdrop-blur-xl">
@@ -643,7 +1173,7 @@ export function StudioShell() {
                     ))}
                   </select>
                   <span className="text-sm text-white/35">
-                    React Flow canvas, local SQLite, streaming runtime
+                    Any profile can point at any configured provider and model.
                   </span>
                 </div>
               </div>
@@ -828,7 +1358,7 @@ export function StudioShell() {
                             >
                               {snapshot?.agents.map((agent) => (
                                 <option key={agent.id} value={agent.id}>
-                                  {agent.name}
+                                  {agent.name} · {agent.profileType}
                                 </option>
                               ))}
                             </select>
