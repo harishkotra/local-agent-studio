@@ -26,11 +26,55 @@ npm run dev
 
 Then open `http://localhost:3000`.
 
+## Install With Curl
+
+Once release artifacts are published, users can install directly from GitHub:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/harishkotra/local-agent-studio/main/install.sh | bash
+```
+
+The installer:
+
+- downloads the latest GitHub Release artifact for the current OS/architecture
+- verifies the SHA-256 checksum
+- installs into `~/.local/share/agent-studio`
+- creates a launcher at `~/.local/bin/agent-studio`
+
+Useful commands after install:
+
+```bash
+agent-studio start
+agent-studio background
+agent-studio stop
+agent-studio status
+agent-studio logs
+```
+
+To install a specific version:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/harishkotra/local-agent-studio/main/install.sh | bash -s -- --version v0.1.0
+```
+
+To uninstall:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/harishkotra/local-agent-studio/main/install.sh | bash -s -- --uninstall
+```
+
 ## Verify
 
 ```bash
 npm run build
 npm test
+```
+
+To package a local release artifact after building:
+
+```bash
+npm run build
+bash scripts/release/package-standalone.sh 0.1.0 local local
 ```
 
 ## Notes
