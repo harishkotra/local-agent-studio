@@ -67,6 +67,28 @@ const nodeTypes = {
   studio: AgentNode,
 };
 
+function formatTraceMessage(event: RunEvent) {
+  if (event.type === "completed" && event.output != null) {
+    return typeof event.output === "string"
+      ? event.output
+      : JSON.stringify(event.output, null, 2);
+  }
+
+  return event.message;
+}
+
+function appendTraceEvent(current: RunEvent[], event: RunEvent) {
+  if (event.type === "stream_delta") {
+    return current;
+  }
+
+  return [...current, event];
+}
+
+function prepareTraceEvents(events: RunEvent[]) {
+  return events.filter((event) => event.type !== "stream_delta");
+}
+
 function asFlowNode(
   node: WorkflowNode,
   agents: AgentProfile[],
@@ -796,7 +818,7 @@ export function StudioShell() {
       eventSource.onmessage = (message) => {
         const event = JSON.parse(message.data) as RunEvent | { type: "ready" };
         if ("runId" in event) {
-          setEvents((current) => [...current, event]);
+          setEvents((current) => appendTraceEvent(current, event));
           if (event.nodeId) {
             const nodeId = event.nodeId;
             setNodeStatuses((current) => ({
@@ -1164,7 +1186,7 @@ export function StudioShell() {
                         events: RunEvent[];
                       };
                       setSelectedRun(json.run);
-                      setEvents(json.events);
+                      setEvents(prepareTraceEvents(json.events));
                       setNodeStatuses(
                         Object.fromEntries(
                           json.run.nodes.map((node) => [node.nodeId, node.status]),
@@ -1177,6 +1199,34 @@ export function StudioShell() {
                     <div className={cn("mt-1 text-xs", mutedClass(theme))}>{run.status}</div>
                   </button>
                 ))}
+              </div>
+            </section>
+
+            <section className={cn("mt-auto rounded-[24px] border p-4 backdrop-blur-xl", panelClass(theme))}>
+              <div className={cn("text-xs uppercase tracking-[0.3em]", subtleClass(theme))}>
+                Credits
+              </div>
+              <div className={cn("mt-3 text-sm leading-6", mutedClass(theme))}>
+                Built By{" "}
+                <a
+                  href="https://harishkotra.me"
+                  target="_blank"
+                  rel="noreferrer"
+                  className={cn("font-medium underline underline-offset-4", theme === "dark" ? "text-white" : "text-slate-900")}
+                >
+                  Harish Kotra
+                </a>
+              </div>
+              <div className={cn("mt-2 text-sm leading-6", mutedClass(theme))}>
+                Checkout my other builds{" "}
+                <a
+                  href="https://dailybuild.xyz"
+                  target="_blank"
+                  rel="noreferrer"
+                  className={cn("font-medium underline underline-offset-4", theme === "dark" ? "text-white" : "text-slate-900")}
+                >
+                  dailybuild.xyz
+                </a>
               </div>
             </section>
           </aside>
@@ -1756,7 +1806,7 @@ export function StudioShell() {
                             </div>
                           </div>
                           <div className={cn("mt-2 whitespace-pre-wrap text-sm leading-6", theme === "dark" ? "text-white/75" : "text-slate-700")}>
-                            {event.message}
+                            {formatTraceMessage(event)}
                           </div>
                         </div>
                       ))
