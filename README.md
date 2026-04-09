@@ -90,21 +90,6 @@ flowchart LR
 - GitHub Releases
 - shell installer via [`install.sh`](./install.sh)
 
-## Repository Structure
-
-```text
-.
-├── apps/
-│   └── web/                  # Next.js studio app
-├── packages/
-│   ├── orchestrator/         # DAG runtime + provider adapters
-│   └── shared/               # Schemas, shared types, sample data
-├── scripts/
-│   └── release/              # Standalone packaging scripts
-├── install.sh                # GitHub-hosted installer
-└── README.md
-```
-
 ## Monorepo Packages
 
 ### `apps/web`
